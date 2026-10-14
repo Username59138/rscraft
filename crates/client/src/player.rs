@@ -100,7 +100,9 @@ pub struct HandPose {
     pub swing: f32,
     /// View bobbing offset in view space.
     pub bob: Vec3,
-    /// Current vertical FOV in radians; the hand is drawn as if it were 70°.
+    /// Vertical FOV in radians without the zoom; the hand is drawn as if it
+    /// were 70°, so it zooms together with the world but ignores sprinting
+    /// and the FOV setting.
     pub fov_y: f32,
 }
 
@@ -122,7 +124,7 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
         * Mat4::from_rotation_z(-0.35)
         * Mat4::from_rotation_x(2.0 - swing_down * 0.7)
         * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
-    // Undo the current FOV so zooming or sprinting doesn't resize the hand.
+    // Undo sprinting and the FOV setting so they don't resize the hand.
     let k = (pose.fov_y / 2.0).tan() / (HAND_FOV / 2.0).tan();
     let transform = view * Mat4::from_scale(Vec3::new(k, k, 1.0)) * arm;
     let mut out = Vec::with_capacity(72);

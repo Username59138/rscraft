@@ -36,8 +36,12 @@ const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 const SWING_SECONDS: f32 = 0.3;
 /// FOV multiplier while sprinting, like vanilla.
 const SPRINT_FOV: f32 = 1.1;
-/// FOV multiplier while holding the zoom key (C), like OptiFine.
-const ZOOM_FOV: f32 = 0.25;
+/// Zoom while holding C, like OptiFine; the mouse wheel changes it.
+const DEFAULT_ZOOM: f32 = 4.0;
+const MIN_ZOOM: f32 = 1.5;
+const MAX_ZOOM: f32 = 50.0;
+/// Each wheel notch zooms in or out by this factor.
+const ZOOM_STEP: f32 = 1.25;
 
 /// A loaded world: the title screen backdrop, or a saved world being played.
 struct Session {
@@ -49,7 +53,11 @@ struct Session {
     player: Option<PlayerController>,
     /// Arm swing progress, 0 when idle.
     swing: f32,
-    fov_multiplier: f32,
+    /// Smoothed FOV multipliers for sprinting and zooming.
+    sprint_fov: f32,
+    zoom_fov: f32,
+    /// How many times the view is magnified while zooming.
+    zoom_level: f32,
 }
 
 /// Like vanilla, spawn on dry land: search outwards from the origin in a
@@ -95,7 +103,9 @@ impl Session {
             world: None,
             player: None,
             swing: 0.0,
-            fov_multiplier: 1.0,
+            sprint_fov: 1.0,
+            zoom_fov: 1.0,
+            zoom_level: DEFAULT_ZOOM,
         }
     }
 
@@ -115,7 +125,9 @@ impl Session {
             world: Some(entry),
             player: Some(player),
             swing: 0.0,
-            fov_multiplier: 1.0,
+            sprint_fov: 1.0,
+            zoom_fov: 1.0,
+            zoom_level: DEFAULT_ZOOM,
         }
     }
 
@@ -148,16 +160,26 @@ impl Session {
         let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
         self.camera.position = player.eye() + offset;
 
+        let smoothing = (dt * 12.0).min(1.0);
         let sprint = if player.sprinting { SPRINT_FOV } else { 1.0 };
-        let target = if zoom { ZOOM_FOV } else { sprint };
-        self.fov_multiplier += (target - self.fov_multiplier) * (dt * 12.0).min(1.0);
-        self.camera.set_fov(fov * self.fov_multiplier);
+        self.sprint_fov += (sprint - self.sprint_fov) * smoothing;
+        if !zoom {
+            self.zoom_level = DEFAULT_ZOOM;
+        }
+        let zoom_target = if zoom { 1.0 / self.zoom_level } else { 1.0 };
+        self.zoom_fov += (zoom_target - self.zoom_fov) * smoothing;
+        self.camera.set_fov(fov * self.sprint_fov * self.zoom_fov);
         if self.swing > 0.0 {
             self.swing += dt / SWING_SECONDS;
             if self.swing >= 1.0 {
                 self.swing = 0.0;
             }
         }
+    }
+
+    /// Mouse wheel while zooming: positive notches zoom in.
+    fn scroll_zoom(&mut self, notches: f32) {
+        self.zoom_level = (self.zoom_level * ZOOM_STEP.powf(notches)).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     fn start_swing(&mut self) {
@@ -187,7 +209,7 @@ impl Session {
             pitch: self.camera.pitch,
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
-            fov_y: self.camera.fov_y(),
+            fov_y: self.camera.fov_y() / self.zoom_fov,
         })
     }
 }
@@ -314,10 +336,15 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                state.ui.input.scroll += match delta {
+                let notches = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 20.0,
                 };
+                if state.playing() && state.input.is_pressed(KeyCode::KeyC) {
+                    state.session.scroll_zoom(notches);
+                } else {
+                    state.ui.input.scroll += notches;
+                }
             }
             WindowEvent::Focused(false) => {
                 state.input.clear();
@@ -413,7 +440,7 @@ impl State {
         if self.playing() {
             let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
             // Turning slows down with the zoom so the view doesn't jump around.
-            let zoom_scale = self.session.fov_multiplier.min(1.0);
+            let zoom_scale = self.session.zoom_fov;
             self.session.camera.look(&mut self.input, self.options.sensitivity * zoom_scale);
             self.session.day.advance(dt, time_speed);
             controls = Some(self.controls());
