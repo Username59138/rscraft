@@ -71,6 +71,8 @@ pub struct PlayerController {
     previous: Vec3,
     pub velocity: Vec3,
     pub on_ground: bool,
+    /// Bumped into a wall during the last move.
+    horizontal_collision: bool,
     pub flying: bool,
     pub sprinting: bool,
     pub sneaking: bool,
@@ -95,6 +97,7 @@ impl PlayerController {
             previous: feet,
             velocity: Vec3::ZERO,
             on_ground: false,
+            horizontal_collision: false,
             flying,
             sprinting: false,
             sneaking: false,
@@ -217,9 +220,16 @@ impl PlayerController {
             if controls.jump {
                 self.velocity.y += 0.04;
             }
+            let start_y = self.position.y;
             self.move_by(world);
             self.velocity *= 0.8;
             self.velocity.y -= 0.02;
+            // Vanilla's way out of water: swimming against a ledge with room
+            // above it gives a boost up and over.
+            let above = Vec3::new(self.velocity.x, self.velocity.y + 0.6 - self.position.y + start_y, self.velocity.z);
+            if self.horizontal_collision && !Self::collides(&Aabb::player(self.position).offset(above), world) {
+                self.velocity.y = 0.3;
+            }
         } else {
             let friction = if self.on_ground { BLOCK_FRICTION * 0.91 } else { 0.91 };
             let speed = if self.sprinting { WALK_SPEED * SPRINT_MULTIPLIER } else { WALK_SPEED };
@@ -318,6 +328,7 @@ impl PlayerController {
         }
 
         self.on_ground = d.y < 0.0 && moved.y != d.y;
+        self.horizontal_collision = moved.x != d.x || moved.z != d.z;
         // Stop on any axis that hit something.
         for axis in 0..3 {
             if moved[axis] != d[axis] {

@@ -34,6 +34,9 @@ impl Vertex {
     }
 }
 
+/// Height of a still water surface, like vanilla (8/9 of a block).
+const WATER_SURFACE: f32 = 8.0 / 9.0;
+
 /// Brightness for 0..=3 unoccluded neighbours around a vertex.
 const AO_CURVE: [f32; 4] = [0.45, 0.65, 0.82, 1.0];
 
@@ -64,13 +67,21 @@ impl MeshData {
 
     /// Appends one block face at world block position `pos`, with an
     /// ambient occlusion level (0..=3) and sky light (0..1) per corner.
-    pub fn push_face(&mut self, pos: IVec3, face: Face, layer: u32, ao: [u8; 4], sky: [f32; 4]) {
+    /// `height` lowers the top of the block (water surfaces); 1.0 is a full block.
+    pub fn push_face(&mut self, pos: IVec3, face: Face, layer: u32, ao: [u8; 4], sky: [f32; 4], height: f32) {
         const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
 
         let base = self.vertices.len() as u32;
         let normal = face.offset().map(|c| c as f32);
         let origin = pos.as_vec3();
-        for (((corner, uv), ao), sky) in corners(face).into_iter().zip(UVS).zip(ao).zip(sky) {
+        for (((mut corner, mut uv), ao), sky) in corners(face).into_iter().zip(UVS).zip(ao).zip(sky) {
+            if corner[1] > 0.5 {
+                corner[1] = height;
+                // Crop side textures instead of squashing them.
+                if face != Face::Up && face != Face::Down {
+                    uv[1] = 1.0 - height;
+                }
+            }
             self.vertices.push(Vertex {
                 position: (origin + glam::Vec3::from(corner)).to_array(),
                 uv,
@@ -199,10 +210,11 @@ impl Neighborhood {
                         let texture = layers.get(block, face);
                         let (ao, sky) = self.face_lighting(local, face, light, origin.y);
                         match layer {
-                            RenderLayer::Solid => mesh.solid.push_face(origin + local, face, texture, ao, sky),
+                            RenderLayer::Solid => mesh.solid.push_face(origin + local, face, texture, ao, sky, 1.0),
                             // No AO on water, it looks wrong on a flat surface.
                             RenderLayer::Translucent => {
-                                mesh.translucent.push_face(origin + local, face, texture, [3; 4], sky)
+                                let height = if self.get(x, y + 1, z) == Block::Water { 1.0 } else { WATER_SURFACE };
+                                mesh.translucent.push_face(origin + local, face, texture, [3; 4], sky, height)
                             }
                         }
                     }
