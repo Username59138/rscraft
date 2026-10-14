@@ -36,6 +36,8 @@ const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 const SWING_SECONDS: f32 = 0.3;
 /// FOV multiplier while sprinting, like vanilla.
 const SPRINT_FOV: f32 = 1.1;
+/// FOV multiplier while holding the zoom key (C), like OptiFine.
+const ZOOM_FOV: f32 = 0.25;
 
 /// A loaded world: the title screen backdrop, or a saved world being played.
 struct Session {
@@ -134,7 +136,7 @@ impl Session {
     }
 
     /// Advances the player one frame and moves the camera to their eyes.
-    fn update_player(&mut self, dt: f32, controls: Option<Controls>, fov: f32) {
+    fn update_player(&mut self, dt: f32, controls: Option<Controls>, fov: f32, zoom: bool) {
         let Some(player) = &mut self.player else { return };
         if let Some(controls) = controls {
             let chunks = &self.chunks;
@@ -146,8 +148,9 @@ impl Session {
         let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
         self.camera.position = player.eye() + offset;
 
-        let target = if player.sprinting { SPRINT_FOV } else { 1.0 };
-        self.fov_multiplier += (target - self.fov_multiplier) * (dt * 10.0).min(1.0);
+        let sprint = if player.sprinting { SPRINT_FOV } else { 1.0 };
+        let target = if zoom { ZOOM_FOV } else { sprint };
+        self.fov_multiplier += (target - self.fov_multiplier) * (dt * 12.0).min(1.0);
         self.camera.set_fov(fov * self.fov_multiplier);
         if self.swing > 0.0 {
             self.swing += dt / SWING_SECONDS;
@@ -184,6 +187,7 @@ impl Session {
             pitch: self.camera.pitch,
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
+            fov_y: self.camera.fov_y(),
         })
     }
 }
@@ -408,13 +412,16 @@ impl State {
         let mut controls = None;
         if self.playing() {
             let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
-            self.session.camera.look(&mut self.input, self.options.sensitivity);
+            // Turning slows down with the zoom so the view doesn't jump around.
+            let zoom_scale = self.session.fov_multiplier.min(1.0);
+            self.session.camera.look(&mut self.input, self.options.sensitivity * zoom_scale);
             self.session.day.advance(dt, time_speed);
             controls = Some(self.controls());
         } else if !self.in_world() {
             self.session.camera.yaw += dt * 0.03;
         }
-        self.session.update_player(dt, controls, self.options.fov);
+        let zoom = self.playing() && self.input.is_pressed(KeyCode::KeyC);
+        self.session.update_player(dt, controls, self.options.fov, zoom);
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
         if let Screen::Loading { progress } = &mut self.screen {

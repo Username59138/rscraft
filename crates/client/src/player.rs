@@ -100,7 +100,12 @@ pub struct HandPose {
     pub swing: f32,
     /// View bobbing offset in view space.
     pub bob: Vec3,
+    /// Current vertical FOV in radians; the hand is drawn as if it were 70°.
+    pub fov_y: f32,
 }
+
+/// Minecraft always draws the hand with this FOV, whatever the zoom or setting.
+const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
 /// Builds the first-person right arm in world space, placed in front of the
 /// camera at the bottom right of the screen.
@@ -109,13 +114,17 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
     let swing_down = (s * std::f32::consts::PI).sin();
     let swing_side = (s.sqrt() * std::f32::consts::PI).sin();
     // View space: X right, Y up, -Z forward.
-    let shoulder = Vec3::new(0.56 - swing_side * 0.25, -0.62 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
+    let shoulder = Vec3::new(0.56 - swing_side * 0.25, -0.56 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
     let view = Mat4::from_translation(pose.eye) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_rotation_x(pose.pitch);
+    // Angled up and in towards the centre of the screen, like vanilla.
     let arm = Mat4::from_translation(shoulder)
-        * Mat4::from_rotation_y(0.3 + swing_side * 0.4)
-        * Mat4::from_rotation_x(1.75 - swing_down * 0.7)
+        * Mat4::from_rotation_y(0.55 + swing_side * 0.4)
+        * Mat4::from_rotation_z(-0.35)
+        * Mat4::from_rotation_x(2.0 - swing_down * 0.7)
         * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
-    let transform = view * arm;
+    // Undo the current FOV so zooming or sprinting doesn't resize the hand.
+    let k = (pose.fov_y / 2.0).tan() / (HAND_FOV / 2.0).tan();
+    let transform = view * Mat4::from_scale(Vec3::new(k, k, 1.0)) * arm;
     let mut out = Vec::with_capacity(72);
     push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.uv, 0.0, transform);
     push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.overlay_uv, FIRST_PERSON_ARM.overlay_inflate, transform);

@@ -52,6 +52,11 @@ impl Camera {
         self.fov_y = degrees.to_radians();
     }
 
+    /// Vertical field of view in radians.
+    pub fn fov_y(&self) -> f32 {
+        self.fov_y
+    }
+
     pub fn forward(&self) -> Vec3 {
         Vec3::new(self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos())
     }
