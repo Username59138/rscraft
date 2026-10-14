@@ -106,6 +106,9 @@ pub struct HandPose {
     pub fov_y: f32,
 }
 
+/// Strength of the arm swing animation; 1.0 is the original, bigger swing.
+const SWING_AMOUNT: f32 = 0.5;
+
 /// Minecraft always draws the hand with this FOV, whatever the zoom or setting.
 const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
@@ -113,14 +116,14 @@ const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// camera at the bottom right of the screen.
 pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
     let s = pose.swing;
-    let swing_down = (s * std::f32::consts::PI).sin();
-    let swing_side = (s.sqrt() * std::f32::consts::PI).sin();
+    let swing_down = (s * std::f32::consts::PI).sin() * SWING_AMOUNT;
+    let swing_side = (s.sqrt() * std::f32::consts::PI).sin() * SWING_AMOUNT;
     // View space: X right, Y up, -Z forward.
-    let shoulder = Vec3::new(0.56 - swing_side * 0.25, -0.56 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
+    let shoulder = Vec3::new(0.36 - swing_side * 0.25, -0.56 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
     let view = Mat4::from_translation(pose.eye) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_rotation_x(pose.pitch);
     // Angled up and in towards the centre of the screen, like vanilla.
     let arm = Mat4::from_translation(shoulder)
-        * Mat4::from_rotation_y(0.55 + swing_side * 0.4)
+        * Mat4::from_rotation_y(0.15 + swing_side * 0.4)
         * Mat4::from_rotation_z(-0.35)
         * Mat4::from_rotation_x(2.0 - swing_down * 0.7)
         * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
