@@ -344,11 +344,12 @@ impl Renderer {
         sky: &SkyState,
         seconds: f32,
         player: Option<&[EntityVertex]>,
+        hand: Option<&[EntityVertex]>,
         ui: &[UiVertex],
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
-        self.player.prepare(&self.queue, player);
+        self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
 
         let frame = match self.surface.get_current_texture() {
@@ -419,7 +420,7 @@ impl Renderer {
             for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
                 mesh.draw(&mut pass);
             }
-            self.player.draw(&mut pass);
+            self.player.draw_body(&mut pass);
             self.clouds.draw(&mut pass);
 
             // Translucent geometry goes last, over the finished opaque scene.
@@ -428,6 +429,25 @@ impl Renderer {
             for mesh in visible.iter().filter_map(|s| s.translucent.as_ref()) {
                 mesh.draw(&mut pass);
             }
+        }
+        if self.player.has_hand() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hand pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.globals_bind_group, &[]);
+            self.player.draw_hand(&mut pass);
         }
         self.ui.draw(&self.device, &self.queue, &mut encoder, &view, ui, gui_size);
         self.queue.submit([encoder.finish()]);

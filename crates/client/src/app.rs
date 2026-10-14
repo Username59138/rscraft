@@ -15,7 +15,8 @@ use crate::camera::{Camera, Perspective};
 use crate::chunks::ChunkManager;
 use crate::debug::{self, DebugInfo};
 use crate::input::Input;
-use crate::player::{self, EYE_HEIGHT, PlayerPose};
+use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
+use crate::player::{self, HandPose, PlayerPose};
 use crate::renderer::Renderer;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
@@ -31,14 +32,45 @@ const TIME_FAST_FORWARD: f32 = 120.0;
 const SPAWN_RADIUS: i32 = 2;
 const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 
+/// Seconds for a full arm swing.
+const SWING_SECONDS: f32 = 0.3;
+/// FOV multiplier while sprinting, like vanilla.
+const SPRINT_FOV: f32 = 1.1;
+
 /// A loaded world: the title screen backdrop, or a saved world being played.
 struct Session {
     chunks: ChunkManager,
     camera: Camera,
     day: DayCycle,
     world: Option<WorldEntry>,
-    walk_distance: f32,
-    walk_amount: f32,
+    /// The player; None for the title backdrop.
+    player: Option<PlayerController>,
+    /// Arm swing progress, 0 when idle.
+    swing: f32,
+    fov_multiplier: f32,
+}
+
+/// Like vanilla, spawn on dry land: search outwards from the origin in a
+/// spiral of 16-block steps for a column above sea level.
+fn find_spawn(generator: &Generator) -> Vec3 {
+    let mut pos = glam::IVec2::ZERO;
+    let mut dir = glam::IVec2::X;
+    let mut leg = 1;
+    for i in 0..4096 {
+        let (x, z) = (pos.x * 16 + 8, pos.y * 16 + 8);
+        let height = generator.surface_height(x, z);
+        if height > SEA_LEVEL {
+            return Vec3::new(x as f32 + 0.5, height as f32 + 1.0, z as f32 + 0.5);
+        }
+        pos += dir;
+        if (i + 1) % leg == 0 {
+            dir = glam::IVec2::new(-dir.y, dir.x);
+            if dir.y == 0 {
+                leg += 1;
+            }
+        }
+    }
+    Vec3::new(8.5, SEA_LEVEL as f32 + 1.0, 8.5)
 }
 
 /// Lets testers start at a given time of day (0 = sunrise, 0.5 = sunset).
@@ -59,37 +91,39 @@ impl Session {
             camera,
             day: DayCycle { time: time_override().unwrap_or(0.15) },
             world: None,
-            walk_distance: 0.0,
-            walk_amount: 0.0,
+            player: None,
+            swing: 0.0,
+            fov_multiplier: 1.0,
         }
     }
 
     fn for_world(entry: WorldEntry, layers: &Arc<BlockLayers>, options: &Options, aspect: f32) -> Self {
         let generator = Arc::new(Generator::new(entry.save.generator_seed()));
-        let mut camera = match &entry.save.player {
-            Some(p) => Camera::new(aspect, Vec3::from(p.position), p.yaw, p.pitch),
-            None => {
-                let ground = generator.surface_height(8, 8).max(SEA_LEVEL - 1) as f32;
-                Camera::new(aspect, Vec3::new(8.5, ground + 1.0 + EYE_HEIGHT, 8.5), 0.0, 0.0)
-            }
+        let (player, yaw, pitch) = match &entry.save.player {
+            // Saves store the eye position.
+            Some(p) => (PlayerController::new(Vec3::from(p.position) - Vec3::Y * EYE_HEIGHT, p.flying), p.yaw, p.pitch),
+            None => (PlayerController::new(find_spawn(&generator), false), 0.0, 0.0),
         };
+        let mut camera = Camera::new(aspect, player.eye(), yaw, pitch);
         camera.set_fov(options.fov);
         Self {
             chunks: ChunkManager::new(generator, layers.clone(), options.render_distance),
             day: DayCycle { time: time_override().unwrap_or(entry.save.time_of_day) },
             camera,
             world: Some(entry),
-            walk_distance: 0.0,
-            walk_amount: 0.0,
+            player: Some(player),
+            swing: 0.0,
+            fov_multiplier: 1.0,
         }
     }
 
     fn save(&mut self) {
-        let Some(world) = &mut self.world else { return };
+        let (Some(world), Some(player)) = (&mut self.world, &self.player) else { return };
         world.save.player = Some(PlayerSave {
-            position: self.camera.position.to_array(),
+            position: (player.position + Vec3::Y * EYE_HEIGHT).to_array(),
             yaw: self.camera.yaw,
             pitch: self.camera.pitch,
+            flying: player.flying,
         });
         world.save.time_of_day = self.day.time;
         world.save.last_played = saves::now();
@@ -99,13 +133,58 @@ impl Session {
         }
     }
 
-    fn pose(&self) -> PlayerPose {
-        PlayerPose {
-            feet: self.camera.position - Vec3::Y * EYE_HEIGHT,
+    /// Advances the player one frame and moves the camera to their eyes.
+    fn update_player(&mut self, dt: f32, controls: Option<Controls>, fov: f32) {
+        let Some(player) = &mut self.player else { return };
+        if let Some(controls) = controls {
+            let chunks = &self.chunks;
+            player.update(dt, controls, self.camera.yaw, &|pos| chunks.block_at(pos));
+        }
+        // View bobbing, like vanilla: sway sideways and dip at every step.
+        let (walk, bob) = player.bobbing();
+        let phase = walk * std::f32::consts::PI;
+        let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
+        self.camera.position = player.eye() + offset;
+
+        let target = if player.sprinting { SPRINT_FOV } else { 1.0 };
+        self.fov_multiplier += (target - self.fov_multiplier) * (dt * 10.0).min(1.0);
+        self.camera.set_fov(fov * self.fov_multiplier);
+        if self.swing > 0.0 {
+            self.swing += dt / SWING_SECONDS;
+            if self.swing >= 1.0 {
+                self.swing = 0.0;
+            }
+        }
+    }
+
+    fn start_swing(&mut self) {
+        if self.swing == 0.0 || self.swing > 0.5 {
+            self.swing = f32::EPSILON;
+        }
+    }
+
+    fn pose(&self) -> Option<PlayerPose> {
+        let player = self.player.as_ref()?;
+        let (walk, bob) = player.bobbing();
+        Some(PlayerPose {
+            feet: player.feet(),
             yaw: self.camera.yaw,
             head_pitch: self.camera.pitch,
-            swing: (self.walk_distance * 2.2).sin() * self.walk_amount,
-        }
+            swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
+        })
+    }
+
+    fn hand(&self) -> Option<HandPose> {
+        let player = self.player.as_ref()?;
+        let (walk, bob) = player.bobbing();
+        let phase = walk * std::f32::consts::PI;
+        Some(HandPose {
+            eye: player.eye(),
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+            swing: self.swing,
+            bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
+        })
     }
 }
 
@@ -219,7 +298,9 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if state.playing() {
-                    if !state.mouse_grabbed {
+                    if state.mouse_grabbed {
+                        state.session.start_swing();
+                    } else {
                         state.set_mouse_grab(true);
                     }
                 } else {
@@ -293,6 +374,17 @@ impl State {
         }
     }
 
+    fn controls(&self) -> Controls {
+        let axis = |plus, minus| self.input.is_pressed(plus) as i32 as f32 - self.input.is_pressed(minus) as i32 as f32;
+        Controls {
+            forward: axis(KeyCode::KeyW, KeyCode::KeyS),
+            strafe: axis(KeyCode::KeyD, KeyCode::KeyA),
+            jump: self.input.is_pressed(KeyCode::Space),
+            sneak: self.input.is_pressed(KeyCode::ShiftLeft),
+            sprint: self.input.is_pressed(KeyCode::ControlLeft),
+        }
+    }
+
     fn open(&mut self, screen: Screen) {
         let playing = matches!(screen, Screen::None);
         self.screen = screen;
@@ -313,23 +405,25 @@ impl State {
         let seconds = (now - self.started).as_secs_f32();
 
         // Simulation: the backdrop slowly turns, the world runs only while playing.
-        let previous = self.session.camera.position;
+        let mut controls = None;
         if self.playing() {
             let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
-            self.session.camera.update(&mut self.input, dt, self.options.sensitivity);
+            self.session.camera.look(&mut self.input, self.options.sensitivity);
             self.session.day.advance(dt, time_speed);
+            controls = Some(self.controls());
         } else if !self.in_world() {
             self.session.camera.yaw += dt * 0.03;
         }
-        let moved = (self.session.camera.position - previous) * Vec3::new(1.0, 0.0, 1.0);
-        self.session.walk_distance += moved.length();
-        let target = if dt > 0.0 { (moved.length() / dt / 10.0).min(1.0) * 0.9 } else { 0.0 };
-        self.session.walk_amount += (target - self.session.walk_amount) * (dt * 10.0).min(1.0);
+        self.session.update_player(dt, controls, self.options.fov);
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
             if *progress >= 1.0 {
+                let chunks = &self.session.chunks;
+                if let Some(player) = &mut self.session.player {
+                    player.unstuck(&|pos| chunks.block_at(pos));
+                }
                 self.open(Screen::None);
             }
         }
@@ -365,13 +459,19 @@ impl State {
 
         // World.
         let perspective = if self.in_world() { self.perspective } else { Perspective::FirstPerson };
-        let player_mesh = (perspective != Perspective::FirstPerson).then(|| player::build_mesh(&self.session.pose()));
+        let player_mesh = (perspective != Perspective::FirstPerson)
+            .then(|| self.session.pose().map(|pose| player::build_mesh(&pose)))
+            .flatten();
+        let hand_mesh = (perspective == Perspective::FirstPerson)
+            .then(|| self.session.hand().map(|hand| player::build_hand_mesh(&hand)))
+            .flatten();
         let camera = self.session.camera.for_perspective(perspective);
         self.renderer.render(
             &camera,
             &self.session.day.state(),
             seconds,
             player_mesh.as_deref(),
+            hand_mesh.as_deref(),
             &self.ui.vertices,
             [self.ui.width, self.ui.height],
         );

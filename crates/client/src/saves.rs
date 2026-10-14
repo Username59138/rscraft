@@ -20,6 +20,8 @@ pub struct PlayerSave {
     pub position: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
+    #[serde(default)]
+    pub flying: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

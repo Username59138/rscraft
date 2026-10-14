@@ -1,12 +1,9 @@
 use glam::camera::rh::{proj, view};
 use glam::{Mat4, Vec3};
-use winit::keyboard::KeyCode;
 
 use crate::input::Input;
 
 const MOUSE_SENSITIVITY: f32 = 0.0025;
-const FLY_SPEED: f32 = 10.0;
-const SPRINT_MULTIPLIER: f32 = 4.0;
 /// Distance of the third-person camera from the player's eyes.
 const THIRD_PERSON_DISTANCE: f32 = 4.0;
 
@@ -28,7 +25,7 @@ impl Perspective {
     }
 }
 
-/// Free-flying first-person camera at the player's eyes. Y is up, like in Minecraft.
+/// First-person camera at the player's eyes. Y is up, like in Minecraft.
 #[derive(Clone)]
 pub struct Camera {
     pub position: Vec3,
@@ -59,40 +56,16 @@ impl Camera {
         Vec3::new(self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos())
     }
 
-    pub fn update(&mut self, input: &mut Input, dt: f32, sensitivity: f32) {
+    /// Turns the camera by the mouse movement since the last frame.
+    pub fn look(&mut self, input: &mut Input, sensitivity: f32) {
         let (dx, dy) = input.take_mouse_delta();
         self.yaw += dx * MOUSE_SENSITIVITY * sensitivity;
         self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY * sensitivity).clamp(-1.55, 1.55);
+    }
 
-        // Horizontal movement ignores pitch, like Minecraft's creative flight.
-        let flat_forward = Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos());
-        let right = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin());
-
-        let mut dir = Vec3::ZERO;
-        if input.is_pressed(KeyCode::KeyW) {
-            dir += flat_forward;
-        }
-        if input.is_pressed(KeyCode::KeyS) {
-            dir -= flat_forward;
-        }
-        if input.is_pressed(KeyCode::KeyD) {
-            dir += right;
-        }
-        if input.is_pressed(KeyCode::KeyA) {
-            dir -= right;
-        }
-        if input.is_pressed(KeyCode::Space) {
-            dir += Vec3::Y;
-        }
-        if input.is_pressed(KeyCode::ShiftLeft) {
-            dir -= Vec3::Y;
-        }
-
-        let mut speed = FLY_SPEED;
-        if input.is_pressed(KeyCode::ControlLeft) {
-            speed *= SPRINT_MULTIPLIER;
-        }
-        self.position += dir.normalize_or_zero() * speed * dt;
+    /// Horizontal right vector, for view bobbing.
+    pub fn right(&self) -> Vec3 {
+        Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin())
     }
 
     /// The camera actually used for rendering in the given perspective.

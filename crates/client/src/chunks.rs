@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
-use rscraft_world::{ColumnGroup, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
+use rscraft_world::{Block, ColumnGroup, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
 
 use crate::mesh::{Neighborhood, SectionMesh};
 use crate::renderer::Renderer;
@@ -77,6 +77,16 @@ impl ChunkManager {
     pub fn set_render_distance(&mut self, render_distance: i32) {
         self.render_distance = render_distance;
         self.load_order = Self::load_order(render_distance);
+    }
+
+    /// The block at a world position, or None if its chunk isn't loaded.
+    pub fn block_at(&self, pos: IVec3) -> Option<Block> {
+        if pos.y < rscraft_world::MIN_Y || pos.y >= rscraft_world::MAX_Y {
+            return Some(Block::Air);
+        }
+        let section = pos.div_euclid(IVec3::splat(SECTION_SIZE));
+        let local = pos.rem_euclid(IVec3::splat(SECTION_SIZE));
+        self.sections.get(&section).map(|s| s.get(local.x, local.y, local.z))
     }
 
     pub fn loaded_columns(&self) -> usize {

@@ -11,7 +11,6 @@ use crate::mesh::corners;
 const SKIN_SIZE: f32 = 64.0;
 /// Model pixels to blocks; the player model is drawn at 15/16 scale like vanilla.
 const PIXEL: f32 = 0.9375 / 16.0;
-pub const EYE_HEIGHT: f32 = 1.62;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -88,6 +87,41 @@ fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32
     }
 }
 
+/// The right arm as seen in first person, in model pixels: the shoulder is
+/// at the origin and the hand points along -Y.
+const FIRST_PERSON_ARM: Part = Part { min: [-2., -12., -2.], size: [4., 12., 4.], uv: [40., 16.], overlay_uv: [40., 32.], overlay_inflate: 0.25, pivot: [0., 0., 0.] };
+
+/// What the first-person arm is doing.
+pub struct HandPose {
+    pub eye: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Swing progress 0..1 (0 = not swinging).
+    pub swing: f32,
+    /// View bobbing offset in view space.
+    pub bob: Vec3,
+}
+
+/// Builds the first-person right arm in world space, placed in front of the
+/// camera at the bottom right of the screen.
+pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
+    let s = pose.swing;
+    let swing_down = (s * std::f32::consts::PI).sin();
+    let swing_side = (s.sqrt() * std::f32::consts::PI).sin();
+    // View space: X right, Y up, -Z forward.
+    let shoulder = Vec3::new(0.56 - swing_side * 0.25, -0.62 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
+    let view = Mat4::from_translation(pose.eye) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_rotation_x(pose.pitch);
+    let arm = Mat4::from_translation(shoulder)
+        * Mat4::from_rotation_y(0.3 + swing_side * 0.4)
+        * Mat4::from_rotation_x(1.75 - swing_down * 0.7)
+        * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
+    let transform = view * arm;
+    let mut out = Vec::with_capacity(72);
+    push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.uv, 0.0, transform);
+    push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.overlay_uv, FIRST_PERSON_ARM.overlay_inflate, transform);
+    out
+}
+
 /// Builds the posed model as a triangle list in world space.
 pub fn build_mesh(pose: &PlayerPose) -> Vec<EntityVertex> {
     let world = Mat4::from_translation(pose.feet) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_scale(Vec3::splat(PIXEL));
@@ -117,7 +151,8 @@ pub struct PlayerRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
+    body_vertices: u32,
+    hand_vertices: u32,
 }
 
 impl PlayerRenderer {
@@ -220,32 +255,49 @@ impl PlayerRenderer {
             cache: None,
         });
 
-        // Two layers × six parts × six faces × six vertices.
+        // Two layers × six faces × six vertices, for six body parts plus the hand.
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("player vertices"),
-            size: (2 * 6 * 36 * size_of::<EntityVertex>()) as u64,
+            size: (2 * 7 * 36 * size_of::<EntityVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { pipeline, bind_group, vertex_buffer, vertex_count: 0 }
+        Self { pipeline, bind_group, vertex_buffer, body_vertices: 0, hand_vertices: 0 }
     }
 
-    /// Uploads this frame's model; call before the render pass starts.
-    pub fn prepare(&mut self, queue: &wgpu::Queue, vertices: Option<&[EntityVertex]>) {
-        let vertices = vertices.unwrap_or_default();
+    /// Uploads this frame's body and first-person hand; call before the
+    /// render pass starts.
+    pub fn prepare(&mut self, queue: &wgpu::Queue, body: Option<&[EntityVertex]>, hand: Option<&[EntityVertex]>) {
+        let (body, hand) = (body.unwrap_or_default(), hand.unwrap_or_default());
+        let vertices: Vec<EntityVertex> = body.iter().chain(hand).copied().collect();
         if !vertices.is_empty() {
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
-        self.vertex_count = vertices.len() as u32;
+        self.body_vertices = body.len() as u32;
+        self.hand_vertices = hand.len() as u32;
     }
 
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if self.vertex_count == 0 {
+    fn draw_range(&self, pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>) {
+        if range.is_empty() {
             return;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(1, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..self.vertex_count, 0..1);
+        pass.draw(range, 0..1);
+    }
+
+    pub fn draw_body(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.draw_range(pass, 0..self.body_vertices);
+    }
+
+    pub fn has_hand(&self) -> bool {
+        self.hand_vertices > 0
+    }
+
+    /// The hand goes in its own pass with a cleared depth buffer, so it is
+    /// never hidden by blocks the camera is close to.
+    pub fn draw_hand(&self, pass: &mut wgpu::RenderPass<'_>) {
+        self.draw_range(pass, self.body_vertices..self.body_vertices + self.hand_vertices);
     }
 }

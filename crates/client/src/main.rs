@@ -6,6 +6,7 @@ mod debug;
 mod frustum;
 mod input;
 mod mesh;
+mod movement;
 mod player;
 mod renderer;
 mod saves;

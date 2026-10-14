@@ -97,6 +97,11 @@ impl Block {
         !matches!(self, Block::Air | Block::Water | Block::OakLeaves)
     }
 
+    /// Whether entities collide with this block.
+    pub fn is_solid(self) -> bool {
+        !matches!(self, Block::Air | Block::Water)
+    }
+
     /// How much sky light this block absorbs: 0 = transparent, 15 = opaque.
     pub fn light_opacity(self) -> u8 {
         match self {
