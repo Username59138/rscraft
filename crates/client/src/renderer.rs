@@ -11,6 +11,7 @@ use rscraft_assets::RgbaImage;
 use winit::window::Window;
 
 use crate::camera::Camera;
+use crate::clouds::CloudRenderer;
 use crate::frustum::Frustum;
 use crate::mesh::{MeshData, SectionMesh, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
@@ -93,6 +94,7 @@ pub struct Renderer {
     texture_bind_group: wgpu::BindGroup,
     block_textures: BlockTextures,
     sky: SkyRenderer,
+    clouds: CloudRenderer,
     player: PlayerRenderer,
     ui: UiRenderer,
     sections: HashMap<IVec3, GpuSection>,
@@ -261,6 +263,7 @@ impl Renderer {
         let solid_pipeline = pipeline(false);
         let translucent_pipeline = pipeline(true);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
+        let clouds = CloudRenderer::new(&device, &sky_images.clouds, &globals_layout, config.format, DEPTH_FORMAT);
         let player = PlayerRenderer::new(&device, &queue, skin, &globals_layout, config.format, DEPTH_FORMAT);
         let ui = UiRenderer::new(&device, &queue, atlas, config.format);
 
@@ -277,6 +280,7 @@ impl Renderer {
             texture_bind_group,
             block_textures,
             sky,
+            clouds,
             player,
             ui,
             sections: HashMap::new(),
@@ -298,6 +302,11 @@ impl Renderer {
 
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
+    }
+
+    /// Clouds reach twice as far as the terrain.
+    fn cloud_extent(&self) -> f32 {
+        self.fog_end * 2.0
     }
 
     pub fn set_render_distance(&mut self, render_distance: i32) {
@@ -340,6 +349,7 @@ impl Renderer {
     ) {
         self.block_textures.animate(&self.queue, seconds);
         self.player.prepare(&self.queue, player);
+        self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -363,7 +373,7 @@ impl Renderer {
             zenith: sky.zenith.extend(sky.ambient).to_array(),
             horizon: sky.horizon.extend(0.0).to_array(),
             sunset: sky.sunset_color.extend(sky.sunset).to_array(),
-            params: [self.fog_end * 0.6, self.fog_end, sky::CLOUD_HEIGHT, self.fog_end * 2.0],
+            params: [self.fog_end * 0.6, self.fog_end, sky::CLOUD_HEIGHT, self.cloud_extent()],
         };
         self.queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
@@ -402,7 +412,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
-            self.sky.draw_sky(&mut pass);
+            self.sky.draw(&mut pass);
 
             pass.set_bind_group(1, &self.texture_bind_group, &[]);
             pass.set_pipeline(&self.solid_pipeline);
@@ -410,7 +420,7 @@ impl Renderer {
                 mesh.draw(&mut pass);
             }
             self.player.draw(&mut pass);
-            self.sky.draw_clouds(&mut pass);
+            self.clouds.draw(&mut pass);
 
             // Translucent geometry goes last, over the finished opaque scene.
             pass.set_bind_group(1, &self.texture_bind_group, &[]);

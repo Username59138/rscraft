@@ -1,10 +1,6 @@
 // Layer 0 = sun, layer 1 = moon.
 @group(1) @binding(0) var celestial: texture_2d_array<f32>;
 @group(1) @binding(1) var celestial_sampler: sampler;
-@group(1) @binding(2) var clouds: texture_2d_array<f32>;
-@group(1) @binding(3) var cloud_sampler: sampler;
-
-// ---- Sky dome -------------------------------------------------------------
 
 struct SkyOut {
     @builtin(position) position: vec4<f32>,
@@ -62,47 +58,4 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     color += celestial_body(dir, sun, 0.3, 0) * above;
     color += celestial_body(dir, -sun, 0.2, 1) * above * mix(1.0, 0.4, daylight);
     return vec4<f32>(color, 1.0);
-}
-
-// ---- Clouds ---------------------------------------------------------------
-
-struct CloudOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) world_pos: vec3<f32>,
-};
-
-@vertex
-fn vs_clouds(@builtin(vertex_index) index: u32) -> CloudOut {
-    var corners = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
-        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
-    );
-    let extent = globals.params.w;
-    let xz = globals.camera_pos.xz + corners[index] * extent;
-    let world = vec3<f32>(xz.x, globals.params.z, xz.y);
-    var out: CloudOut;
-    out.position = globals.view_proj * vec4<f32>(world, 1.0);
-    out.world_pos = world;
-    return out;
-}
-
-@fragment
-fn fs_clouds(in: CloudOut) -> @location(0) vec4<f32> {
-    // One texel of clouds.png covers 12×12 blocks; clouds drift towards +X.
-    let drift = vec2<f32>(globals.camera_pos.w * 0.6, 0.0);
-    let uv = (in.world_pos.xz - drift) / (12.0 * 256.0);
-    let mask = textureSampleLevel(clouds, cloud_sampler, uv, 0, 0.0).a;
-    if mask < 0.5 {
-        discard;
-    }
-
-    let daylight = globals.sun_dir.w;
-    var color = mix(vec3<f32>(0.08, 0.08, 0.11), vec3<f32>(1.0), daylight) + globals.sunset.rgb * globals.sunset.w * 0.4;
-    // Seen from below, clouds are a bit darker.
-    if globals.camera_pos.y < globals.params.z {
-        color *= 0.82;
-    }
-    let dist = distance(in.world_pos.xz, globals.camera_pos.xz);
-    let fade = 1.0 - smoothstep(globals.params.w * 0.4, globals.params.w, dist);
-    return vec4<f32>(color, 0.8 * fade);
 }

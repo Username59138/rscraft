@@ -1,6 +1,7 @@
 mod app;
 mod camera;
 mod chunks;
+mod clouds;
 mod debug;
 mod frustum;
 mod input;

@@ -1,4 +1,4 @@
-//! Day/night cycle, sky dome (gradient, sun, moon, stars) and flat clouds.
+//! Day/night cycle and the sky dome (gradient, sun, moon, stars).
 
 use std::f32::consts::TAU;
 
@@ -70,7 +70,7 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 pub struct SkyImages {
     sun: RgbaImage,
     moon: RgbaImage,
-    clouds: RgbaImage,
+    pub clouds: RgbaImage,
 }
 
 impl SkyImages {
@@ -105,10 +105,9 @@ fn placeholder_disc(color: [u8; 4]) -> RgbaImage {
     image
 }
 
-/// Draws the sky before the world and the clouds after the opaque world.
+/// Draws the sky behind everything else.
 pub struct SkyRenderer {
-    sky_pipeline: wgpu::RenderPipeline,
-    cloud_pipeline: wgpu::RenderPipeline,
+    pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
 }
 
@@ -122,15 +121,8 @@ impl SkyRenderer {
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let celestial = upload(device, queue, "celestial", &[&images.sun, &images.moon]);
-        let clouds = upload(device, queue, "clouds", &[&images.clouds]);
         let celestial_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("celestial sampler"),
-            ..Default::default()
-        });
-        let cloud_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("cloud sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
             ..Default::default()
         });
 
@@ -152,7 +144,7 @@ impl SkyRenderer {
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sky layout"),
-            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2), sampler_entry(3)],
+            entries: &[texture_entry(0), sampler_entry(1)],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sky bind group"),
@@ -160,8 +152,6 @@ impl SkyRenderer {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&celestial) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&celestial_sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&clouds) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&cloud_sampler) },
             ],
         });
 
@@ -171,71 +161,46 @@ impl SkyRenderer {
             bind_group_layouts: &[Some(globals_layout), Some(&layout)],
             ..Default::default()
         });
-        let pipeline = |label, vs, fs, blend, depth_compare| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vs),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fs),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: depth_format,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(depth_compare),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_sky"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_sky"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
-        Self {
-            sky_pipeline: pipeline(
-                "sky pipeline",
-                "vs_sky",
-                "fs_sky",
-                wgpu::BlendState::REPLACE,
-                wgpu::CompareFunction::Always,
-            ),
-            cloud_pipeline: pipeline(
-                "cloud pipeline",
-                "vs_clouds",
-                "fs_clouds",
-                wgpu::BlendState::ALPHA_BLENDING,
-                wgpu::CompareFunction::Less,
-            ),
-            bind_group,
-        }
+        Self { pipeline, bind_group }
     }
 
     /// A full-screen triangle; must be drawn first.
-    pub fn draw_sky(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.sky_pipeline);
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(1, &self.bind_group, &[]);
         pass.draw(0..3, 0..1);
-    }
-
-    /// One big quad at cloud height, depth-tested against the world.
-    pub fn draw_clouds(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.cloud_pipeline);
-        pass.set_bind_group(1, &self.bind_group, &[]);
-        pass.draw(0..6, 0..1);
     }
 }
 
