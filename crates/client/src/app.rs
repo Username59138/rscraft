@@ -15,10 +15,13 @@ use crate::camera::Camera;
 use crate::chunks::ChunkManager;
 use crate::input::Input;
 use crate::renderer::Renderer;
+use crate::sky::{DayCycle, SkyImages};
 use crate::texture::BlockImages;
 
 /// Radius in chunks.
 const RENDER_DISTANCE: i32 = 16;
+/// Holding T makes time run this much faster.
+const TIME_FAST_FORWARD: f32 = 120.0;
 
 /// Everything that only exists while the window is alive.
 struct State {
@@ -27,6 +30,8 @@ struct State {
     chunks: ChunkManager,
     camera: Camera,
     input: Input,
+    day: DayCycle,
+    started: Instant,
     last_frame: Instant,
     fps_timer: Instant,
     frames: u32,
@@ -35,13 +40,14 @@ struct State {
 
 pub struct App {
     images: BlockImages,
+    sky_images: SkyImages,
     generator: Arc<Generator>,
     state: Option<State>,
 }
 
 impl App {
-    pub fn new(images: BlockImages, seed: u32) -> Self {
-        Self { images, generator: Arc::new(Generator::new(seed)), state: None }
+    pub fn new(images: BlockImages, sky_images: SkyImages, seed: u32) -> Self {
+        Self { images, sky_images, generator: Arc::new(Generator::new(seed)), state: None }
     }
 }
 
@@ -61,6 +67,7 @@ impl ApplicationHandler for App {
             window.clone(),
             event_loop.owned_display_handle(),
             &self.images,
+            &self.sky_images,
             RENDER_DISTANCE,
         ));
         let chunks = ChunkManager::new(self.generator.clone(), Arc::new(self.images.layers.clone()), RENDER_DISTANCE);
@@ -73,6 +80,11 @@ impl ApplicationHandler for App {
             chunks,
             camera,
             input: Input::default(),
+            // Early morning, unless overridden for testing (0 = sunrise, 0.5 = sunset).
+            day: DayCycle {
+                time: std::env::var("RSCRAFT_TIME").ok().and_then(|t| t.parse().ok()).unwrap_or(0.04),
+            },
+            started: Instant::now(),
             last_frame: Instant::now(),
             fps_timer: Instant::now(),
             frames: 0,
@@ -135,8 +147,10 @@ impl State {
         self.last_frame = now;
 
         self.camera.update(&mut self.input, dt);
+        let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
+        self.day.advance(dt, time_speed);
         self.chunks.update(self.camera.position, &mut self.renderer);
-        self.renderer.render(&self.camera);
+        self.renderer.render(&self.camera, &self.day.state(), (now - self.started).as_secs_f32());
 
         self.frames += 1;
         let elapsed = self.fps_timer.elapsed().as_secs_f32();

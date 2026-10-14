@@ -97,6 +97,15 @@ impl Block {
         !matches!(self, Block::Air | Block::Water | Block::OakLeaves)
     }
 
+    /// How much sky light this block absorbs: 0 = transparent, 15 = opaque.
+    pub fn light_opacity(self) -> u8 {
+        match self {
+            Block::Air => 0,
+            Block::Water | Block::OakLeaves => 1,
+            _ => 15,
+        }
+    }
+
     pub fn render_layer(self) -> Option<RenderLayer> {
         match self {
             Block::Air => None,

@@ -1,12 +1,3 @@
-struct Globals {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    fog_color: vec4<f32>,
-    // x = start, y = end
-    fog_range: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> globals: Globals;
 @group(1) @binding(0) var block_textures: texture_2d_array<f32>;
 @group(1) @binding(1) var block_sampler: sampler;
 
@@ -15,15 +6,24 @@ struct VertexIn {
     @location(1) uv: vec2<f32>,
     @location(2) normal: vec3<f32>,
     @location(3) layer: u32,
+    @location(4) ao: f32,
+    @location(5) sky: f32,
 };
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) layer: u32,
-    @location(2) shade: f32,
-    @location(3) fog: f32,
+    @location(2) light: f32,
+    @location(3) world_pos: vec3<f32>,
 };
+
+/// Minecraft's light curve at the default 50% brightness setting.
+fn light_brightness(level: f32) -> f32 {
+    let dim = level / (4.0 - 3.0 * level);
+    let bright = 1.0 - pow(1.0 - dim, 4.0);
+    return mix(dim, bright, 0.5);
+}
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
@@ -31,18 +31,20 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.clip_position = globals.view_proj * vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
     out.layer = in.layer;
+    out.world_pos = in.position;
     // Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
     let n = in.normal;
-    out.shade = 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z);
-    // Cylindrical fog like Minecraft: horizontal distance only.
-    let dist = distance(in.position.xz, globals.camera_pos.xz);
-    out.fog = smoothstep(globals.fog_range.x, globals.fog_range.y, dist);
+    let shade = 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z);
+    // Sky light is scaled by the time of day; a little ambient keeps caves from pitch black.
+    let sky = light_brightness(in.sky) * globals.zenith.w;
+    out.light = shade * in.ao * max(sky, 0.03);
     return out;
 }
 
 fn shaded(in: VertexOut) -> vec4<f32> {
     let color = textureSample(block_textures, block_sampler, in.uv, in.layer);
-    return vec4<f32>(mix(color.rgb * in.shade, globals.fog_color.rgb, in.fog), color.a);
+    let lit = color.rgb * in.light;
+    return vec4<f32>(mix(lit, fog_color(in.world_pos), fog_factor(in.world_pos)), color.a);
 }
 
 @fragment

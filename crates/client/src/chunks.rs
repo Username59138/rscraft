@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
-use rscraft_world::{Face, Generator, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
+use rscraft_world::{ColumnGroup, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
 
 use crate::mesh::{Neighborhood, SectionMesh};
 use crate::renderer::Renderer;
@@ -130,8 +130,8 @@ impl ChunkManager {
         }
     }
 
-    /// Meshes every generated column whose four neighbours are generated too,
-    /// so faces on chunk borders are culled correctly.
+    /// Meshes every generated column whose eight neighbours are generated too,
+    /// so border faces are culled and ambient occlusion is correct.
     fn schedule_meshing(&mut self) {
         let ready: Vec<IVec2> = self
             .columns
@@ -139,7 +139,7 @@ impl ChunkManager {
             .filter(|&(_, &state)| state == ColumnState::Generated)
             .map(|(&c, _)| c)
             .filter(|c| {
-                [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y].iter().all(|d| {
+                (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| IVec2::new(dx, dz))).all(|d| {
                     matches!(self.columns.get(&(c + d)), Some(ColumnState::Generated | ColumnState::Meshed))
                 })
             })
@@ -147,22 +147,26 @@ impl ChunkManager {
 
         for column in ready {
             self.columns.insert(column, ColumnState::Meshed);
-            for i in 0..SECTIONS_PER_COLUMN as i32 {
-                let pos = IVec3::new(column.x, MIN_SECTION_Y + i, column.y);
-                let center = self.sections[&pos].clone();
-                if center.is_empty() {
-                    continue;
+            let columns: ColumnGroup = std::array::from_fn(|i| {
+                let c = column + IVec2::new(i as i32 % 3 - 1, i as i32 / 3 - 1);
+                (0..SECTIONS_PER_COLUMN as i32)
+                    .map(|y| self.sections[&IVec3::new(c.x, MIN_SECTION_Y + y, c.y)].clone())
+                    .collect()
+            });
+            let layers = self.layers.clone();
+            let tx = self.meshed_tx.clone();
+            // Light needs the whole 3×3 group, so a column is lit and meshed in one job.
+            rayon::spawn(move || {
+                let light = LightRegion::compute(&columns);
+                for (index, section) in columns[4].iter().enumerate() {
+                    if section.is_empty() {
+                        continue;
+                    }
+                    let pos = IVec3::new(column.x, MIN_SECTION_Y + index as i32, column.y);
+                    let mesh = Neighborhood::from_columns(&columns, index).build_mesh(pos, &layers, &light);
+                    let _ = tx.send((pos, mesh));
                 }
-                let neighborhood = Neighborhood {
-                    center,
-                    neighbors: Face::ALL.map(|f| self.sections.get(&(pos + IVec3::from(f.offset()))).cloned()),
-                };
-                let layers = self.layers.clone();
-                let tx = self.meshed_tx.clone();
-                rayon::spawn(move || {
-                    let _ = tx.send((pos, neighborhood.build_mesh(pos, &layers)));
-                });
-            }
+            });
         }
     }
 

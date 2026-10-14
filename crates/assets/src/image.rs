@@ -52,6 +52,19 @@ impl RgbaImage {
         self
     }
 
+    /// Splits a vertical strip of square frames (animated textures).
+    pub fn split_frames(&self) -> Vec<Self> {
+        let frame_bytes = (self.width * self.width * 4) as usize;
+        let count = (self.height / self.width).max(1) as usize;
+        (0..count)
+            .map(|i| Self {
+                width: self.width,
+                height: self.width.min(self.height),
+                pixels: self.pixels[i * frame_bytes..((i + 1) * frame_bytes).min(self.pixels.len())].to_vec(),
+            })
+            .collect()
+    }
+
     /// Nearest-neighbour resize, used to normalise odd-sized textures.
     pub fn resized(&self, width: u32, height: u32) -> Self {
         if (width, height) == (self.width, self.height) {
@@ -66,18 +79,28 @@ impl RgbaImage {
         out
     }
 
-    /// Half-size image using a 2×2 box filter (for mipmaps).
-    pub fn downsampled(&self) -> Self {
+    /// Half-size image using a 2×2 box filter (for mipmaps). With `cutout`,
+    /// colour is averaged over opaque pixels only and alpha takes the maximum,
+    /// so cut-out textures such as leaves don't fade away in the distance.
+    pub fn downsampled(&self, cutout: bool) -> Self {
         let (w, h) = ((self.width / 2).max(1), (self.height / 2).max(1));
         let mut out = Self::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                let mut sum = [0u32; 4];
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let p = self.pixel((x * 2 + dx).min(self.width - 1), (y * 2 + dy).min(self.height - 1));
-                    sum.iter_mut().zip(p).for_each(|(s, c)| *s += c as u32);
-                }
-                out.set_pixel(x, y, sum.map(|s| (s / 4) as u8));
+                let samples = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .map(|(dx, dy)| self.pixel((x * 2 + dx).min(self.width - 1), (y * 2 + dy).min(self.height - 1)));
+                let average = |pixels: &[[u8; 4]], channel: usize| {
+                    (pixels.iter().map(|p| p[channel] as u32).sum::<u32>() / pixels.len().max(1) as u32) as u8
+                };
+                let pixel = if cutout {
+                    let opaque: Vec<[u8; 4]> = samples.iter().copied().filter(|p| p[3] > 0).collect();
+                    let source = if opaque.is_empty() { &samples[..] } else { &opaque[..] };
+                    let alpha = samples.iter().map(|p| p[3]).max().unwrap_or(0);
+                    [average(source, 0), average(source, 1), average(source, 2), alpha]
+                } else {
+                    [0, 1, 2, 3].map(|c| average(&samples, c))
+                };
+                out.set_pixel(x, y, pixel);
             }
         }
         out

@@ -46,6 +46,25 @@ impl ClientJar {
         Ok(image.crop_top_square())
     }
 
+    /// All animation frames of a block texture plus the frame duration in
+    /// game ticks (1/20 s), read from the `.mcmeta` next to it.
+    pub fn block_texture_frames(&mut self, name: &str) -> Result<(Vec<RgbaImage>, u32)> {
+        let path = format!("assets/minecraft/textures/block/{name}.png");
+        let strip = self.read_png(&path)?;
+        let frametime = self
+            .read(&format!("{path}.mcmeta"))
+            .ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+            .and_then(|meta| meta["animation"]["frametime"].as_u64())
+            .unwrap_or(1) as u32;
+        Ok((strip.split_frames(), frametime.max(1)))
+    }
+
+    /// A texture under `assets/minecraft/textures/`, e.g. `environment/clouds`.
+    pub fn texture(&mut self, name: &str) -> Result<RgbaImage> {
+        self.read_png(&format!("assets/minecraft/textures/{name}.png"))
+    }
+
     /// A biome colour map (`"grass"`, `"foliage"`): 256×256, temperature × downfall.
     pub fn colormap(&mut self, name: &str) -> Result<RgbaImage> {
         self.read_png(&format!("assets/minecraft/textures/colormap/{name}.png"))

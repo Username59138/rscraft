@@ -12,20 +12,31 @@ use winit::window::Window;
 use crate::camera::Camera;
 use crate::frustum::Frustum;
 use crate::mesh::{MeshData, SectionMesh, Vertex};
+use crate::sky::{self, SkyImages, SkyRenderer, SkyState};
 use crate::texture::{BlockImages, BlockTextures};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// Sky colour in linear space (the surface is sRGB).
-const SKY_COLOR: [f32; 3] = [0.47, 0.65, 1.0];
 
+/// Mirrors `Globals` in common.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
+    inv_view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
-    fog_color: [f32; 4],
-    /// x = fog start, y = fog end (horizontal distance in blocks).
-    fog_range: [f32; 4],
+    sun_dir: [f32; 4],
+    zenith: [f32; 4],
+    horizon: [f32; 4],
+    sunset: [f32; 4],
+    params: [f32; 4],
+}
+
+/// Compiles a WGSL shader with common.wgsl prepended.
+pub fn shader_module(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(format!("{}\n{source}", include_str!("common.wgsl")).into()),
+    })
 }
 
 /// A mesh living on the GPU.
@@ -76,6 +87,8 @@ pub struct Renderer {
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
+    block_textures: BlockTextures,
+    sky: SkyRenderer,
     sections: HashMap<IVec3, GpuSection>,
     fog_end: f32,
     /// Sections drawn in the last frame, for the debug title.
@@ -87,6 +100,7 @@ impl Renderer {
         window: Arc<Window>,
         display: OwnedDisplayHandle,
         images: &BlockImages,
+        sky_images: &SkyImages,
         render_distance: i32,
     ) -> Self {
         let size = window.inner_size();
@@ -157,7 +171,7 @@ impl Renderer {
         });
 
         // Block textures.
-        let textures = BlockTextures::new(&device, &queue, images);
+        let block_textures = BlockTextures::new(&device, &queue, images);
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("block texture layout"),
             entries: &[
@@ -183,13 +197,13 @@ impl Renderer {
             label: Some("block texture bind group"),
             layout: &texture_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&textures.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&textures.sampler) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&block_textures.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&block_textures.sampler) },
             ],
         });
 
         // Pipelines.
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let shader = shader_module(&device, "block shader", include_str!("blocks.wgsl"));
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("block pipeline layout"),
             bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout)],
@@ -236,6 +250,7 @@ impl Renderer {
         };
         let solid_pipeline = pipeline(false);
         let translucent_pipeline = pipeline(true);
+        let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
 
         Self {
             surface,
@@ -248,6 +263,8 @@ impl Renderer {
             globals_buffer,
             globals_bind_group,
             texture_bind_group,
+            block_textures,
+            sky,
             sections: HashMap::new(),
             fog_end: ((render_distance - 1) * SECTION_SIZE) as f32,
             drawn_sections: 0,
@@ -280,7 +297,9 @@ impl Renderer {
         self.sections.retain(|pos, _| pos.x != column.x || pos.z != column.y);
     }
 
-    pub fn render(&mut self, camera: &Camera) {
+    pub fn render(&mut self, camera: &Camera, sky: &SkyState, seconds: f32) {
+        self.block_textures.animate(&self.queue, seconds);
+
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -297,9 +316,13 @@ impl Renderer {
         let view_proj = camera.view_proj();
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera.position.extend(0.0).to_array(),
-            fog_color: [SKY_COLOR[0], SKY_COLOR[1], SKY_COLOR[2], 1.0],
-            fog_range: [self.fog_end * 0.6, self.fog_end, 0.0, 0.0],
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            camera_pos: camera.position.extend(seconds).to_array(),
+            sun_dir: sky.sun_dir.extend(sky.daylight).to_array(),
+            zenith: sky.zenith.extend(sky.ambient).to_array(),
+            horizon: sky.horizon.extend(0.0).to_array(),
+            sunset: sky.sunset_color.extend(sky.sunset).to_array(),
+            params: [self.fog_end * 0.6, self.fog_end, sky::CLOUD_HEIGHT, self.fog_end * 2.0],
         };
         self.queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
@@ -318,7 +341,6 @@ impl Renderer {
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            let [r, g, b] = SKY_COLOR.map(f64::from);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -326,7 +348,8 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                        // The sky pass covers every pixel.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -338,13 +361,17 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
-            pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            self.sky.draw_sky(&mut pass);
 
+            pass.set_bind_group(1, &self.texture_bind_group, &[]);
             pass.set_pipeline(&self.solid_pipeline);
             for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
                 mesh.draw(&mut pass);
             }
+            self.sky.draw_clouds(&mut pass);
+
             // Translucent geometry goes last, over the finished opaque scene.
+            pass.set_bind_group(1, &self.texture_bind_group, &[]);
             pass.set_pipeline(&self.translucent_pipeline);
             for mesh in visible.iter().filter_map(|s| s.translucent.as_ref()) {
                 mesh.draw(&mut pass);
