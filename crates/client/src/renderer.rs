@@ -7,13 +7,17 @@ use rscraft_world::SECTION_SIZE;
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
+use rscraft_assets::RgbaImage;
 use winit::window::Window;
 
 use crate::camera::Camera;
 use crate::frustum::Frustum;
 use crate::mesh::{MeshData, SectionMesh, Vertex};
+use crate::player::{EntityVertex, PlayerRenderer};
 use crate::sky::{self, SkyImages, SkyRenderer, SkyState};
 use crate::texture::{BlockImages, BlockTextures};
+use crate::ui::render::UiRenderer;
+use crate::ui::{GuiAtlas, UiVertex};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -89,10 +93,14 @@ pub struct Renderer {
     texture_bind_group: wgpu::BindGroup,
     block_textures: BlockTextures,
     sky: SkyRenderer,
+    player: PlayerRenderer,
+    ui: UiRenderer,
     sections: HashMap<IVec3, GpuSection>,
     fog_end: f32,
-    /// Sections drawn in the last frame, for the debug title.
+    /// Sections drawn in the last frame, for the debug screen.
     pub drawn_sections: usize,
+    /// GPU name and graphics API, for the debug screen.
+    pub gpu: String,
 }
 
 impl Renderer {
@@ -101,6 +109,8 @@ impl Renderer {
         display: OwnedDisplayHandle,
         images: &BlockImages,
         sky_images: &SkyImages,
+        atlas: &GuiAtlas,
+        skin: &RgbaImage,
         render_distance: i32,
     ) -> Self {
         let size = window.inner_size();
@@ -251,6 +261,8 @@ impl Renderer {
         let solid_pipeline = pipeline(false);
         let translucent_pipeline = pipeline(true);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
+        let player = PlayerRenderer::new(&device, &queue, skin, &globals_layout, config.format, DEPTH_FORMAT);
+        let ui = UiRenderer::new(&device, &queue, atlas, config.format);
 
         Self {
             surface,
@@ -265,9 +277,12 @@ impl Renderer {
             texture_bind_group,
             block_textures,
             sky,
+            player,
+            ui,
             sections: HashMap::new(),
-            fog_end: ((render_distance - 1) * SECTION_SIZE) as f32,
+            fog_end: fog_end(render_distance),
             drawn_sections: 0,
+            gpu: format!("{} ({:?})", info.name, info.backend),
         }
     }
 
@@ -279,6 +294,23 @@ impl Renderer {
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    pub fn set_render_distance(&mut self, render_distance: i32) {
+        self.fog_end = fog_end(render_distance);
+    }
+
+    /// Drops every section, e.g. when switching worlds.
+    pub fn clear_sections(&mut self) {
+        self.sections.clear();
+    }
+
+    pub fn total_sections(&self) -> usize {
+        self.sections.len()
     }
 
     pub fn upload_section(&mut self, pos: IVec3, mesh: &SectionMesh) {
@@ -297,8 +329,17 @@ impl Renderer {
         self.sections.retain(|pos, _| pos.x != column.x || pos.z != column.y);
     }
 
-    pub fn render(&mut self, camera: &Camera, sky: &SkyState, seconds: f32) {
+    pub fn render(
+        &mut self,
+        camera: &Camera,
+        sky: &SkyState,
+        seconds: f32,
+        player: Option<&[EntityVertex]>,
+        ui: &[UiVertex],
+        gui_size: [f32; 2],
+    ) {
         self.block_textures.animate(&self.queue, seconds);
+        self.player.prepare(&self.queue, player);
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -368,6 +409,7 @@ impl Renderer {
             for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
                 mesh.draw(&mut pass);
             }
+            self.player.draw(&mut pass);
             self.sky.draw_clouds(&mut pass);
 
             // Translucent geometry goes last, over the finished opaque scene.
@@ -377,9 +419,15 @@ impl Renderer {
                 mesh.draw(&mut pass);
             }
         }
+        self.ui.draw(&self.device, &self.queue, &mut encoder, &view, ui, gui_size);
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
     }
+}
+
+/// Fog ends a chunk before the edge of loaded terrain.
+fn fog_end(render_distance: i32) -> f32 {
+    ((render_distance - 1) * SECTION_SIZE) as f32
 }
 
 fn create_depth_view(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {

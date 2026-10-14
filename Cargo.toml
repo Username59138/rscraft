@@ -22,6 +22,7 @@ fastnoise-lite = "1.1.1"
 rayon = "1.12.0"
 crossbeam-channel = "0.5.17"
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
 png = "0.18.1"
 serde = { version = "1.0.229", features = ["derive"] }

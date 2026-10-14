@@ -1,94 +1,191 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use glam::Vec3;
+use rscraft_assets::RgbaImage;
+use rscraft_world::{Generator, SEA_LEVEL};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-use glam::Vec3;
-use rscraft_world::Generator;
-
-use crate::camera::Camera;
+use crate::camera::{Camera, Perspective};
 use crate::chunks::ChunkManager;
+use crate::debug::{self, DebugInfo};
 use crate::input::Input;
+use crate::player::{self, EYE_HEIGHT, PlayerPose};
 use crate::renderer::Renderer;
+use crate::saves::{self, Options, PlayerSave, WorldEntry};
+use crate::screens::{self, Action, Screen};
 use crate::sky::{DayCycle, SkyImages};
-use crate::texture::BlockImages;
+use crate::texture::{BlockImages, BlockLayers};
+use crate::ui::{GuiAtlas, Rect, Sprite, Ui};
 
-/// Radius in chunks.
-const RENDER_DISTANCE: i32 = 16;
+/// World shown behind the title screen.
+const MENU_SEED: u32 = 1337;
 /// Holding T makes time run this much faster.
 const TIME_FAST_FORWARD: f32 = 120.0;
+/// Columns around the spawn that must be ready before a world opens.
+const SPAWN_RADIUS: i32 = 2;
+const DOUBLE_CLICK_SECONDS: f32 = 0.35;
+
+/// A loaded world: the title screen backdrop, or a saved world being played.
+struct Session {
+    chunks: ChunkManager,
+    camera: Camera,
+    day: DayCycle,
+    world: Option<WorldEntry>,
+    walk_distance: f32,
+    walk_amount: f32,
+}
+
+/// Lets testers start at a given time of day (0 = sunrise, 0.5 = sunset).
+fn time_override() -> Option<f32> {
+    std::env::var("RSCRAFT_TIME").ok().and_then(|t| t.parse().ok())
+}
+
+impl Session {
+    fn backdrop(layers: &Arc<BlockLayers>, options: &Options, aspect: f32) -> Self {
+        let generator = Arc::new(Generator::new(MENU_SEED));
+        let height = generator.surface_height(0, 0).max(SEA_LEVEL) as f32;
+        let mut camera = Camera::new(aspect, Vec3::new(0.5, height + 24.0, 0.5), 0.0, -0.15);
+        camera.set_fov(options.fov);
+        // The backdrop doesn't need the full render distance.
+        let chunks = ChunkManager::new(generator, layers.clone(), options.render_distance.min(10));
+        Self {
+            chunks,
+            camera,
+            day: DayCycle { time: time_override().unwrap_or(0.15) },
+            world: None,
+            walk_distance: 0.0,
+            walk_amount: 0.0,
+        }
+    }
+
+    fn for_world(entry: WorldEntry, layers: &Arc<BlockLayers>, options: &Options, aspect: f32) -> Self {
+        let generator = Arc::new(Generator::new(entry.save.generator_seed()));
+        let mut camera = match &entry.save.player {
+            Some(p) => Camera::new(aspect, Vec3::from(p.position), p.yaw, p.pitch),
+            None => {
+                let ground = generator.surface_height(8, 8).max(SEA_LEVEL - 1) as f32;
+                Camera::new(aspect, Vec3::new(8.5, ground + 1.0 + EYE_HEIGHT, 8.5), 0.0, 0.0)
+            }
+        };
+        camera.set_fov(options.fov);
+        Self {
+            chunks: ChunkManager::new(generator, layers.clone(), options.render_distance),
+            day: DayCycle { time: time_override().unwrap_or(entry.save.time_of_day) },
+            camera,
+            world: Some(entry),
+            walk_distance: 0.0,
+            walk_amount: 0.0,
+        }
+    }
+
+    fn save(&mut self) {
+        let Some(world) = &mut self.world else { return };
+        world.save.player = Some(PlayerSave {
+            position: self.camera.position.to_array(),
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+        });
+        world.save.time_of_day = self.day.time;
+        world.save.last_played = saves::now();
+        match world.write() {
+            Ok(()) => log::info!("saved world {}", world.save.name),
+            Err(err) => log::error!("{err:#}"),
+        }
+    }
+
+    fn pose(&self) -> PlayerPose {
+        PlayerPose {
+            feet: self.camera.position - Vec3::Y * EYE_HEIGHT,
+            yaw: self.camera.yaw,
+            head_pitch: self.camera.pitch,
+            swing: (self.walk_distance * 2.2).sin() * self.walk_amount,
+        }
+    }
+}
 
 /// Everything that only exists while the window is alive.
 struct State {
     window: Arc<Window>,
     renderer: Renderer,
-    chunks: ChunkManager,
-    camera: Camera,
+    ui: Ui,
+    layers: Arc<BlockLayers>,
+    session: Session,
+    screen: Screen,
+    options: Options,
     input: Input,
-    day: DayCycle,
+    perspective: Perspective,
+    show_debug: bool,
+    mouse_grabbed: bool,
+    quit: bool,
     started: Instant,
     last_frame: Instant,
+    last_click: Instant,
     fps_timer: Instant,
     frames: u32,
-    mouse_grabbed: bool,
+    fps: u32,
 }
 
 pub struct App {
     images: BlockImages,
     sky_images: SkyImages,
-    generator: Arc<Generator>,
+    atlas: Option<GuiAtlas>,
+    skin: RgbaImage,
     state: Option<State>,
 }
 
 impl App {
-    pub fn new(images: BlockImages, sky_images: SkyImages, seed: u32) -> Self {
-        Self { images, sky_images, generator: Arc::new(Generator::new(seed)), state: None }
+    pub fn new(images: BlockImages, sky_images: SkyImages, atlas: GuiAtlas, skin: RgbaImage) -> Self {
+        Self { images, sky_images, atlas: Some(atlas), skin, state: None }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
-            return;
-        }
+        let Some(atlas) = self.atlas.take() else { return };
 
-        let attrs = Window::default_attributes()
-            .with_title("rscraft")
-            .with_inner_size(PhysicalSize::new(1280, 720));
+        let attrs = Window::default_attributes().with_title("rscraft").with_inner_size(PhysicalSize::new(1280, 720));
         let window = Arc::new(event_loop.create_window(attrs).expect("failed to create window"));
         let size = window.inner_size();
+        let aspect = size.width as f32 / size.height.max(1) as f32;
 
+        let options = Options::load();
         let renderer = pollster::block_on(Renderer::new(
             window.clone(),
             event_loop.owned_display_handle(),
             &self.images,
             &self.sky_images,
-            RENDER_DISTANCE,
+            &atlas,
+            &self.skin,
+            options.render_distance,
         ));
-        let chunks = ChunkManager::new(self.generator.clone(), Arc::new(self.images.layers.clone()), RENDER_DISTANCE);
-        let spawn_height = self.generator.surface_height(8, 8).max(rscraft_world::SEA_LEVEL) as f32;
-        let camera = Camera::new(size.width as f32 / size.height.max(1) as f32, Vec3::new(8.5, spawn_height + 12.0, 8.5));
+        let layers = Arc::new(self.images.layers.clone());
+        let session = Session::backdrop(&layers, &options, aspect);
 
         self.state = Some(State {
             window,
             renderer,
-            chunks,
-            camera,
+            ui: Ui::new(atlas),
+            layers,
+            session,
+            screen: Screen::Title,
+            options,
             input: Input::default(),
-            // Early morning, unless overridden for testing (0 = sunrise, 0.5 = sunset).
-            day: DayCycle {
-                time: std::env::var("RSCRAFT_TIME").ok().and_then(|t| t.parse().ok()).unwrap_or(0.04),
-            },
+            perspective: Perspective::FirstPerson,
+            show_debug: false,
+            mouse_grabbed: false,
+            quit: false,
             started: Instant::now(),
             last_frame: Instant::now(),
+            last_click: Instant::now(),
             fps_timer: Instant::now(),
             frames: 0,
-            mouse_grabbed: false,
+            fps: 0,
         });
     }
 
@@ -96,40 +193,69 @@ impl ApplicationHandler for App {
         let Some(state) = self.state.as_mut() else { return };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                state.session.save();
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 state.renderer.resize(size);
-                state.camera.set_aspect(size.width as f32 / size.height.max(1) as f32);
+                state.session.camera.set_aspect(size.width as f32 / size.height.max(1) as f32);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    let pressed = event.state == ElementState::Pressed;
-                    if code == KeyCode::Escape && pressed {
-                        state.set_mouse_grab(false);
-                    }
-                    state.input.set_key(code, pressed);
+                let PhysicalKey::Code(code) = event.physical_key else { return };
+                let pressed = event.state == ElementState::Pressed;
+                state.input.set_key(code, pressed);
+                if pressed {
+                    state.key_pressed(code, event.text.as_deref());
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
-                if !state.mouse_grabbed {
-                    state.set_mouse_grab(true);
+            WindowEvent::CursorMoved { position, .. } => {
+                state.ui.input.mouse = glam::Vec2::new(position.x as f32, position.y as f32) / state.ui.scale;
+            }
+            WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
+                let pressed = button_state == ElementState::Pressed;
+                state.ui.input.mouse_down = pressed;
+                if !pressed {
+                    return;
                 }
+                if state.playing() {
+                    if !state.mouse_grabbed {
+                        state.set_mouse_grab(true);
+                    }
+                } else {
+                    state.ui.input.clicked = true;
+                    state.ui.input.double_clicked = state.last_click.elapsed().as_secs_f32() < DOUBLE_CLICK_SECONDS;
+                    state.last_click = Instant::now();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                state.ui.input.scroll += match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 20.0,
+                };
             }
             WindowEvent::Focused(false) => {
-                state.set_mouse_grab(false);
                 state.input.clear();
+                if state.playing() {
+                    state.open(Screen::Pause);
+                }
             }
-            WindowEvent::RedrawRequested => state.frame(),
+            WindowEvent::RedrawRequested => {
+                state.frame();
+                if state.quit {
+                    event_loop.exit();
+                }
+            }
             _ => {}
         }
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         let Some(state) = self.state.as_mut() else { return };
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if state.mouse_grabbed {
-                state.input.add_mouse_delta(delta.0 as f32, delta.1 as f32);
-            }
+        if let DeviceEvent::MouseMotion { delta } = event
+            && state.mouse_grabbed
+        {
+            state.input.add_mouse_delta(delta.0 as f32, delta.1 as f32);
         }
     }
 
@@ -141,36 +267,173 @@ impl ApplicationHandler for App {
 }
 
 impl State {
+    fn in_world(&self) -> bool {
+        self.session.world.is_some()
+    }
+
+    /// In a world with no menu open.
+    fn playing(&self) -> bool {
+        self.in_world() && matches!(self.screen, Screen::None)
+    }
+
+    fn key_pressed(&mut self, code: KeyCode, text: Option<&str>) {
+        if self.playing() {
+            match code {
+                KeyCode::Escape => self.open(Screen::Pause),
+                KeyCode::F3 => self.show_debug = !self.show_debug,
+                KeyCode::F5 => self.perspective = self.perspective.next(),
+                _ => {}
+            }
+            return;
+        }
+        // Menus handle their own keys.
+        self.ui.input.keys.push(code);
+        if let Some(text) = text {
+            self.ui.input.typed.push_str(text);
+        }
+    }
+
+    fn open(&mut self, screen: Screen) {
+        let playing = matches!(screen, Screen::None);
+        self.screen = screen;
+        self.input.clear();
+        self.set_mouse_grab(playing);
+    }
+
+    fn gui_scale(&self) -> u32 {
+        let (w, h) = self.renderer.size();
+        let max = Ui::auto_scale(w, h, u32::MAX);
+        if self.options.gui_scale == 0 { max } else { self.options.gui_scale.min(max) }
+    }
+
     fn frame(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        let seconds = (now - self.started).as_secs_f32();
 
-        self.camera.update(&mut self.input, dt);
-        let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
-        self.day.advance(dt, time_speed);
-        self.chunks.update(self.camera.position, &mut self.renderer);
-        self.renderer.render(&self.camera, &self.day.state(), (now - self.started).as_secs_f32());
+        // Simulation: the backdrop slowly turns, the world runs only while playing.
+        let previous = self.session.camera.position;
+        if self.playing() {
+            let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
+            self.session.camera.update(&mut self.input, dt, self.options.sensitivity);
+            self.session.day.advance(dt, time_speed);
+        } else if !self.in_world() {
+            self.session.camera.yaw += dt * 0.03;
+        }
+        let moved = (self.session.camera.position - previous) * Vec3::new(1.0, 0.0, 1.0);
+        self.session.walk_distance += moved.length();
+        let target = if dt > 0.0 { (moved.length() / dt / 10.0).min(1.0) * 0.9 } else { 0.0 };
+        self.session.walk_amount += (target - self.session.walk_amount) * (dt * 10.0).min(1.0);
+
+        self.session.chunks.update(self.session.camera.position, &mut self.renderer);
+        if let Screen::Loading { progress } = &mut self.screen {
+            *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
+            if *progress >= 1.0 {
+                self.open(Screen::None);
+            }
+        }
+
+        // Interface.
+        let (width, height) = self.renderer.size();
+        let scale = self.gui_scale();
+        self.ui.begin(width, height, scale, dt);
+        if self.playing() && self.perspective == Perspective::FirstPerson {
+            let (cx, cy) = ((self.ui.width / 2.0).floor(), (self.ui.height / 2.0).floor());
+            self.ui.sprite(Sprite::Crosshair, Rect::new(cx - 7.0, cy - 7.0, 15.0, 15.0), [1.0; 4]);
+        }
+        if self.show_debug && self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
+            let camera = &self.session.camera;
+            let info = DebugInfo {
+                fps: self.fps,
+                drawn_sections: self.renderer.drawn_sections,
+                total_sections: self.renderer.total_sections(),
+                loaded_columns: self.session.chunks.loaded_columns(),
+                position: camera.position,
+                yaw: camera.yaw,
+                pitch: camera.pitch,
+                time_of_day: self.session.day.time,
+                seed: self.session.world.as_ref().map_or(0, |w| w.save.seed),
+                render_distance: self.options.render_distance,
+                gpu: &self.renderer.gpu,
+                screen: (width, height),
+            };
+            debug::draw(&mut self.ui, &info);
+        }
+        let action = screens::draw(&mut self.screen, &mut self.ui, &mut self.options);
+        self.apply(action);
+
+        // World.
+        let perspective = if self.in_world() { self.perspective } else { Perspective::FirstPerson };
+        let player_mesh = (perspective != Perspective::FirstPerson).then(|| player::build_mesh(&self.session.pose()));
+        let camera = self.session.camera.for_perspective(perspective);
+        self.renderer.render(
+            &camera,
+            &self.session.day.state(),
+            seconds,
+            player_mesh.as_deref(),
+            &self.ui.vertices,
+            [self.ui.width, self.ui.height],
+        );
+        self.ui.input.end_frame();
 
         self.frames += 1;
         let elapsed = self.fps_timer.elapsed().as_secs_f32();
         if elapsed >= 1.0 {
-            let fps = self.frames as f32 / elapsed;
-            let p = self.camera.position;
-            self.window.set_title(&format!(
-                "rscraft — {fps:.0} FPS — pos {:.1} {:.1} {:.1} — {} columns, {} sections drawn",
-                p.x,
-                p.y,
-                p.z,
-                self.chunks.loaded_columns(),
-                self.renderer.drawn_sections,
-            ));
+            self.fps = (self.frames as f32 / elapsed).round() as u32;
             self.frames = 0;
             self.fps_timer = now;
         }
     }
 
+    fn switch_session(&mut self, session: Session) {
+        self.renderer.clear_sections();
+        self.session = session;
+        self.renderer.set_render_distance(self.options.render_distance);
+    }
+
+    fn aspect(&self) -> f32 {
+        let (w, h) = self.renderer.size();
+        w as f32 / h.max(1) as f32
+    }
+
+    fn apply(&mut self, action: Action) {
+        match action {
+            Action::None => {}
+            Action::Open(screen) => self.open(screen),
+            Action::Play(entry) => {
+                log::info!("opening world {} (seed {})", entry.save.name, entry.save.seed);
+                let session = Session::for_world(entry, &self.layers, &self.options, self.aspect());
+                self.switch_session(session);
+                self.perspective = Perspective::FirstPerson;
+                self.open(Screen::Loading { progress: 0.0 });
+            }
+            Action::Resume => self.open(Screen::None),
+            Action::SaveAndQuit => {
+                self.session.save();
+                let backdrop = Session::backdrop(&self.layers, &self.options, self.aspect());
+                self.switch_session(backdrop);
+                self.open(Screen::Title);
+            }
+            Action::Quit => self.quit = true,
+            Action::ApplyOptions => {
+                self.session.camera.set_fov(self.options.fov);
+                if self.in_world() {
+                    self.session.chunks.set_render_distance(self.options.render_distance);
+                    self.renderer.set_render_distance(self.options.render_distance);
+                }
+            }
+            Action::CloseOptions { from_pause } => {
+                self.options.save();
+                self.open(if from_pause { Screen::Pause } else { Screen::Title });
+            }
+        }
+    }
+
     fn set_mouse_grab(&mut self, grab: bool) {
+        if grab == self.mouse_grabbed {
+            return;
+        }
         if grab {
             // Wayland supports Locked, X11 only Confined: try both.
             let ok = self

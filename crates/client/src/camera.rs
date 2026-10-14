@@ -7,14 +7,35 @@ use crate::input::Input;
 const MOUSE_SENSITIVITY: f32 = 0.0025;
 const FLY_SPEED: f32 = 10.0;
 const SPRINT_MULTIPLIER: f32 = 4.0;
+/// Distance of the third-person camera from the player's eyes.
+const THIRD_PERSON_DISTANCE: f32 = 4.0;
 
-/// Free-flying first-person camera. Y is up, like in Minecraft.
+/// First person or one of the two third-person views (F5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Perspective {
+    FirstPerson,
+    ThirdPersonBack,
+    ThirdPersonFront,
+}
+
+impl Perspective {
+    pub fn next(self) -> Self {
+        match self {
+            Perspective::FirstPerson => Perspective::ThirdPersonBack,
+            Perspective::ThirdPersonBack => Perspective::ThirdPersonFront,
+            Perspective::ThirdPersonFront => Perspective::FirstPerson,
+        }
+    }
+}
+
+/// Free-flying first-person camera at the player's eyes. Y is up, like in Minecraft.
+#[derive(Clone)]
 pub struct Camera {
     pub position: Vec3,
-    /// Rotation around Y in radians; 0 looks towards -Z.
-    yaw: f32,
+    /// Rotation around Y in radians; 0 looks towards -Z (north).
+    pub yaw: f32,
     /// Rotation up/down in radians, clamped to avoid flipping.
-    pitch: f32,
+    pub pitch: f32,
     fov_y: f32,
     aspect: f32,
     near: f32,
@@ -22,34 +43,26 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new(aspect: f32, position: Vec3) -> Self {
-        Self {
-            position,
-            yaw: 0.0,
-            pitch: -0.3,
-            fov_y: 70f32.to_radians(),
-            aspect,
-            near: 0.05,
-            far: 1000.0,
-        }
+    pub fn new(aspect: f32, position: Vec3, yaw: f32, pitch: f32) -> Self {
+        Self { position, yaw, pitch, fov_y: 70f32.to_radians(), aspect, near: 0.05, far: 1000.0 }
     }
 
     pub fn set_aspect(&mut self, aspect: f32) {
         self.aspect = aspect;
     }
 
-    pub fn forward(&self) -> Vec3 {
-        Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            -self.yaw.cos() * self.pitch.cos(),
-        )
+    pub fn set_fov(&mut self, degrees: f32) {
+        self.fov_y = degrees.to_radians();
     }
 
-    pub fn update(&mut self, input: &mut Input, dt: f32) {
+    pub fn forward(&self) -> Vec3 {
+        Vec3::new(self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos())
+    }
+
+    pub fn update(&mut self, input: &mut Input, dt: f32, sensitivity: f32) {
         let (dx, dy) = input.take_mouse_delta();
-        self.yaw += dx * MOUSE_SENSITIVITY;
-        self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY).clamp(-1.55, 1.55);
+        self.yaw += dx * MOUSE_SENSITIVITY * sensitivity;
+        self.pitch = (self.pitch - dy * MOUSE_SENSITIVITY * sensitivity).clamp(-1.55, 1.55);
 
         // Horizontal movement ignores pitch, like Minecraft's creative flight.
         let flat_forward = Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos());
@@ -80,6 +93,21 @@ impl Camera {
             speed *= SPRINT_MULTIPLIER;
         }
         self.position += dir.normalize_or_zero() * speed * dt;
+    }
+
+    /// The camera actually used for rendering in the given perspective.
+    pub fn for_perspective(&self, perspective: Perspective) -> Camera {
+        let mut camera = self.clone();
+        match perspective {
+            Perspective::FirstPerson => {}
+            Perspective::ThirdPersonBack => camera.position -= self.forward() * THIRD_PERSON_DISTANCE,
+            Perspective::ThirdPersonFront => {
+                camera.position += self.forward() * THIRD_PERSON_DISTANCE;
+                camera.yaw += std::f32::consts::PI;
+                camera.pitch = -self.pitch;
+            }
+        }
+        camera
     }
 
     pub fn view_proj(&self) -> Mat4 {

@@ -39,7 +39,7 @@ const AO_CURVE: [f32; 4] = [0.45, 0.65, 0.82, 1.0];
 
 /// Corners of a unit cube face, counter-clockwise when seen from outside,
 /// starting at the bottom-left of the texture.
-fn corners(face: Face) -> [[f32; 3]; 4] {
+pub fn corners(face: Face) -> [[f32; 3]; 4] {
     match face {
         Face::East => [[1., 0., 1.], [1., 0., 0.], [1., 1., 0.], [1., 1., 1.]],
         Face::West => [[0., 0., 0.], [0., 0., 1.], [0., 1., 1.], [0., 1., 0.]],

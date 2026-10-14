@@ -47,13 +47,7 @@ pub fn column_of(position: Vec3) -> IVec2 {
 
 impl ChunkManager {
     pub fn new(generator: Arc<Generator>, layers: Arc<BlockLayers>, render_distance: i32) -> Self {
-        let r = render_distance;
-        let mut load_order: Vec<IVec2> = (-r..=r)
-            .flat_map(|z| (-r..=r).map(move |x| IVec2::new(x, z)))
-            .filter(|o| o.length_squared() <= r * r)
-            .collect();
-        load_order.sort_by_key(|o| o.length_squared());
-
+        let load_order = Self::load_order(render_distance);
         let (generated_tx, generated_rx) = crossbeam_channel::unbounded();
         let (meshed_tx, meshed_rx) = crossbeam_channel::unbounded();
         Self {
@@ -71,8 +65,30 @@ impl ChunkManager {
         }
     }
 
+    fn load_order(r: i32) -> Vec<IVec2> {
+        let mut order: Vec<IVec2> = (-r..=r)
+            .flat_map(|z| (-r..=r).map(move |x| IVec2::new(x, z)))
+            .filter(|o| o.length_squared() <= r * r)
+            .collect();
+        order.sort_by_key(|o| o.length_squared());
+        order
+    }
+
+    pub fn set_render_distance(&mut self, render_distance: i32) {
+        self.render_distance = render_distance;
+        self.load_order = Self::load_order(render_distance);
+    }
+
     pub fn loaded_columns(&self) -> usize {
         self.columns.len()
+    }
+
+    /// Fraction of the columns within `radius` of `player` that are meshed.
+    pub fn progress(&self, player: Vec3, radius: i32) -> f32 {
+        let center = column_of(player);
+        let offsets = Self::load_order(radius);
+        let done = offsets.iter().filter(|&&o| self.columns.get(&(center + o)) == Some(&ColumnState::Meshed)).count();
+        done as f32 / offsets.len() as f32
     }
 
     fn in_range(&self, column: IVec2, center: IVec2, margin: i32) -> bool {
