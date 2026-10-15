@@ -107,7 +107,7 @@ pub struct HandPose {
 }
 
 /// Strength of the arm swing animation; 1.0 is the original, bigger swing.
-const SWING_AMOUNT: f32 = 0.5;
+const SWING_AMOUNT: f32 = 0.55;
 
 /// Minecraft always draws the hand with this FOV, whatever the zoom or setting.
 const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
