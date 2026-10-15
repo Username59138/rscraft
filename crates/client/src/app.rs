@@ -640,6 +640,13 @@ impl State {
         self.in_world() && matches!(self.screen, Screen::None)
     }
 
+    /// Whether the world keeps running. Like vanilla singleplayer, only the
+    /// pause menu (and the options opened from it) stops it; the inventory
+    /// doesn't.
+    fn world_running(&self) -> bool {
+        self.in_world() && !matches!(self.screen, Screen::Pause | Screen::Options { from_pause: true } | Screen::Loading { .. })
+    }
+
     fn key_pressed(&mut self, code: KeyCode, text: Option<&str>) {
         if self.playing() {
             match code {
@@ -697,14 +704,18 @@ impl State {
         self.last_frame = now;
         let seconds = (now - self.started).as_secs_f32();
 
-        // Simulation: the backdrop slowly turns, the world runs only while playing.
+        // Simulation: the backdrop slowly turns; the world runs unless paused,
+        // but only takes the player's input when no screen is open.
         let mut controls = None;
+        if self.world_running() {
+            let time_speed = if self.playing() && self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
+            self.session.day.advance(dt, time_speed);
+            controls = Some(Controls { look_y: self.session.camera.forward().y, ..Controls::default() });
+        }
         if self.playing() {
-            let time_speed = if self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
             // Turning slows down with the zoom so the view doesn't jump around.
             let zoom_scale = self.session.zoom_fov;
             self.session.camera.look(&mut self.input, self.options.sensitivity * zoom_scale);
-            self.session.day.advance(dt, time_speed);
             controls = Some(self.controls());
         } else if !self.in_world() {
             self.session.camera.yaw += dt * 0.03;
@@ -719,10 +730,10 @@ impl State {
         };
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
-        // Items keep falling while menus are open, but are only picked up in play.
-        if self.in_world() {
+        // Items and particles run with the world, inventory open or not.
+        if self.world_running() {
             let session = &mut self.session;
-            let feet = session.player.as_ref().filter(|_| matches!(self.screen, Screen::None)).map(PlayerController::feet);
+            let feet = session.player.as_ref().map(PlayerController::feet);
             let chunks = &session.chunks;
             session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
             if let Some((at, surface, velocity)) = session.player.as_mut().and_then(|p| p.splash.take()) {
