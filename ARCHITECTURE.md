@@ -22,6 +22,8 @@ Dependencies only point downwards in this list.
 - `session.rs` — a loaded world and the player in it: the game tick, what
   the player does to the world (breaking, placing, crafting), per-frame view
   effects, and building the frame's 3D scene for the renderer.
+- `hand.rs` — the first-person hand's animation (swing, switching items,
+  lag when turning), ticked like vanilla; `player.rs` poses and builds it.
 - `chunks.rs` — loading, generating, lighting and meshing columns around
   the player on a thread pool.
 - `renderer/` — everything wgpu: terrain passes, sky, clouds, entities,

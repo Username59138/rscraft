@@ -2,7 +2,7 @@
 //! drawn with the skin texture.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use rscraft_assets::RgbaImage;
 use rscraft_world::Face;
 
@@ -141,81 +141,74 @@ fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32
     }
 }
 
-/// The right arm as seen in first person, in model pixels: the shoulder is
-/// at the origin and the hand points along -Y.
-const FIRST_PERSON_ARM: Part = Part {
-    min: [-2., -12., -2.],
-    size: [4., 12., 4.],
-    uv: [40., 16.],
-    overlay_uv: [40., 32.],
-    overlay_inflate: 0.25,
-    pivot: [0., 0., 0.],
-};
-
-/// What the first-person arm is doing.
+/// What the first-person hand is doing; see `hand::HandAnimation`.
 pub struct HandPose {
-    pub eye: Vec3,
-    pub yaw: f32,
-    pub pitch: f32,
-    /// Swing progress 0..1 (0 = not swinging).
-    pub swing: f32,
-    /// How far the hand is raised when switching items: 1 = in place, 0 = hidden.
-    pub equip: f32,
-    /// View bobbing offset in view space.
-    pub bob: Vec3,
-    /// Sky light level at the player, 0..1.
-    pub light: f32,
-    /// Width / height of the view.
-    pub aspect: f32,
+    /// The camera's view matrix as rendered, view bobbing included.
+    pub view: Mat4,
     /// Vertical FOV in radians without the zoom; the hand is drawn as if it
     /// were 70°, so it zooms together with the world but ignores sprinting
     /// and the FOV setting.
     pub fov_y: f32,
+    /// Attack swing progress 0..1.
+    pub swing: f32,
+    /// How far the hand is lowered: 0 in place, 1 hidden.
+    pub lowered: f32,
+    /// How far the arm lags behind the view, in degrees (pitch down, yaw).
+    pub sway: Vec2,
+    /// View bobbing: walk distance and strength.
+    pub walk: f32,
+    pub bob: f32,
+    /// Sky light level at the player, 0..1.
+    pub light: f32,
+    /// Width / height of the view.
+    pub aspect: f32,
 }
-
-/// Strength of the arm swing animation; 1.0 is the original, bigger swing.
-const SWING_AMOUNT: f32 = 1.0;
 
 /// Minecraft always draws the hand with this FOV, whatever the zoom or setting.
 const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
 
-/// Lowers the hand while switching items, like vanilla (0.6 below when hidden).
-fn equip_offset(pose: &HandPose) -> Vec3 {
-    Vec3::new(0.0, -0.6 * (1.0 - pose.equip), 0.0)
+fn degrees(d: f32) -> f32 {
+    d.to_radians()
 }
 
-/// Camera-space to world-space for first-person objects, with the FOV
-/// correction that keeps them the same size when sprinting.
-fn first_person_view(pose: &HandPose) -> Mat4 {
-    let view = Mat4::from_translation(pose.eye) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_rotation_x(pose.pitch);
+/// View space (X right, Y up, -Z forward) of first-person objects, mapped
+/// to world space. Like vanilla's item-in-hand pose stack: view bobbing
+/// (GameRenderer.bobView) and the arm's lag when turning, drawn with a 70°
+/// projection whatever the FOV.
+fn hand_space(pose: &HandPose) -> Mat4 {
+    use std::f32::consts::PI;
     let k = (pose.fov_y / 2.0).tan() / (HAND_FOV / 2.0).tan();
-    view * Mat4::from_scale(Vec3::new(k, k, 1.0))
+    // Vanilla bobs by the walk distance counted backwards.
+    let (w, bob) = (-pose.walk * PI, pose.bob);
+    let bob_view = Mat4::from_translation(Vec3::new(w.sin() * bob * 0.5, -(w.cos() * bob).abs(), 0.0))
+        * Mat4::from_rotation_z(degrees(w.sin() * bob * 3.0))
+        * Mat4::from_rotation_x(degrees((w - 0.2).cos().abs() * bob * 5.0));
+    let sway = Mat4::from_rotation_x(degrees(pose.sway.x)) * Mat4::from_rotation_y(degrees(pose.sway.y));
+    // Vanilla's offsets are made for 16:9 and push the hand off the right
+    // edge of narrower windows; shift it left to where 16:9 shows it.
+    let narrow = (pose.aspect / (16.0 / 9.0)).min(1.0);
+    let shift = Mat4::from_translation(Vec3::new(0.6 * (narrow - 1.0), 0.0, 0.0));
+    pose.view.inverse() * Mat4::from_scale(Vec3::new(k, k, 1.0)) * shift * bob_view * sway
 }
 
 /// Where a block held in the right hand is drawn in first person, as the
-/// transform of the unit cube 0..1. Follows vanilla's ItemInHandRenderer:
-/// placed at the bottom right, turned 45°, scaled to 0.4, and swung by the
-/// same attack animation as items.
+/// transform of the unit cube 0..1: vanilla's item arm placement and swing
+/// (applyItemArmTransform, swingArm), then the block model's own
+/// first-person display transform (turned 45°, scaled to 0.4).
 pub fn held_block_first_person(pose: &HandPose) -> Mat4 {
     use std::f32::consts::{PI, TAU};
-    let s = pose.swing;
-    let (sqrt_s, deg) = (s.sqrt(), |d: f32| d.to_radians());
-    let push = Vec3::new(-0.4 * (sqrt_s * PI).sin(), 0.2 * (sqrt_s * TAU).sin(), -0.2 * (s * PI).sin()) * SWING_AMOUNT;
-    let twist = (s * s * PI).sin() * SWING_AMOUNT;
-    let tilt = (sqrt_s * PI).sin() * SWING_AMOUNT;
-    // Vanilla's offsets assume a 16:9 window; in narrower ones the block
-    // would slide off the right edge, so keep its place on screen instead.
-    let x = 0.56 * (pose.aspect / (16.0 / 9.0)).min(1.0);
-    let item = Mat4::from_translation(Vec3::new(x, -0.52, -0.72) + push + pose.bob + equip_offset(pose))
-        * Mat4::from_rotation_y(deg(45.0 - 20.0 * twist))
-        * Mat4::from_rotation_z(deg(-20.0 * tilt))
-        * Mat4::from_rotation_x(deg(-80.0 * tilt))
-        * Mat4::from_rotation_y(deg(-45.0))
-        // The block model's own first-person display transform.
-        * Mat4::from_rotation_y(deg(45.0))
+    let a = pose.swing;
+    let sa = a.sqrt();
+    let item = Mat4::from_translation(Vec3::new(0.56, -0.52 - 0.6 * pose.lowered, -0.72))
+        * Mat4::from_translation(Vec3::new(-0.4 * (sa * PI).sin(), 0.2 * (sa * TAU).sin(), -0.2 * (a * PI).sin()))
+        * Mat4::from_rotation_y(degrees(45.0 - 20.0 * (a * a * PI).sin()))
+        * Mat4::from_rotation_z(degrees(-20.0 * (sa * PI).sin()))
+        * Mat4::from_rotation_x(degrees(-80.0 * (sa * PI).sin()))
+        * Mat4::from_rotation_y(degrees(-45.0))
+        * Mat4::from_rotation_y(degrees(45.0))
         * Mat4::from_scale(Vec3::splat(0.4))
         * Mat4::from_translation(Vec3::splat(-0.5));
-    first_person_view(pose) * item
+    hand_space(pose) * item
 }
 
 /// Where a block held in the right hand is drawn in third person, as the
@@ -255,27 +248,36 @@ fn part_transform(pose: &PlayerPose, part: &Part, angle: f32) -> Mat4 {
         * Mat4::from_translation(-pivot)
 }
 
-/// Builds the first-person right arm in world space, placed in front of the
-/// camera at the bottom right of the screen.
+/// Builds the first-person right arm in world space, placed and swung like
+/// vanilla's ItemInHandRenderer.renderPlayerArm.
 pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
-    let s = pose.swing;
-    let swing_down = (s * std::f32::consts::PI).sin() * SWING_AMOUNT;
-    let swing_side = (s.sqrt() * std::f32::consts::PI).sin() * SWING_AMOUNT;
-    // View space: X right, Y up, -Z forward.
-    let shoulder = Vec3::new(0.36 - swing_side * 0.25, -0.66 + swing_down * 0.1, -0.3 - swing_down * 0.15)
-        + pose.bob
-        + equip_offset(pose);
-    // Angled up and in towards the centre of the screen, like vanilla.
-    let arm = Mat4::from_translation(shoulder)
-        * Mat4::from_rotation_y(0.15 + swing_side * 0.4)
-        * Mat4::from_rotation_z(-0.35)
-        * Mat4::from_rotation_x(2.0 - swing_down * 0.7)
-        * Mat4::from_scale(Vec3::splat(1.0 / 16.0));
-    let transform = first_person_view(pose) * arm;
+    use std::f32::consts::{PI, TAU};
+    let a = pose.swing;
+    let sa = a.sqrt();
+    let arm = Mat4::from_translation(Vec3::new(
+        0.64 - 0.3 * (sa * PI).sin(),
+        -0.6 + 0.4 * (sa * TAU).sin() - 0.6 * pose.lowered,
+        -0.72 - 0.4 * (a * PI).sin(),
+    )) * Mat4::from_rotation_y(degrees(45.0 + 70.0 * (sa * PI).sin()))
+        * Mat4::from_rotation_z(degrees(-20.0 * (a * a * PI).sin()))
+        * Mat4::from_translation(Vec3::new(-1.0, 3.6, 3.5))
+        * Mat4::from_rotation_z(degrees(120.0))
+        * Mat4::from_rotation_x(degrees(200.0))
+        * Mat4::from_rotation_y(degrees(-135.0))
+        * Mat4::from_translation(Vec3::new(5.6, 0.0, 0.0));
+    // The arm part itself, in vanilla's model space (Y down, X mirrored from
+    // ours): at its shoulder pivot and tilted out by 0.1 rad, 1/16 per pixel.
+    let pivot = Vec3::new(-5.0, 2.0, 0.0);
+    let part = Mat4::from_scale(Vec3::splat(1.0 / 16.0))
+        * Mat4::from_translation(pivot)
+        * Mat4::from_rotation_z(0.1)
+        * Mat4::from_translation(-pivot)
+        * Mat4::from_translation(Vec3::new(0.0, 24.0, 0.0))
+        * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0));
+    let transform = hand_space(pose) * arm * part;
     let mut out = Vec::with_capacity(72);
-    let arm = &FIRST_PERSON_ARM;
-    push_box(&mut out, arm, arm.uv, 0.0, transform, pose.light);
-    push_box(&mut out, arm, arm.overlay_uv, arm.overlay_inflate, transform, pose.light);
+    push_box(&mut out, &RIGHT_ARM, RIGHT_ARM.uv, 0.0, transform, pose.light);
+    push_box(&mut out, &RIGHT_ARM, RIGHT_ARM.overlay_uv, RIGHT_ARM.overlay_inflate, transform, pose.light);
     out
 }
 

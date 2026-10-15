@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use glam::{IVec3, Vec3};
+use glam::{IVec3, Vec2, Vec3};
 use rscraft_world::crafting::Grid;
 use rscraft_world::dropped_items::DroppedItems;
 use rscraft_world::gamemode::GameMode;
@@ -14,6 +14,7 @@ use rscraft_world::{Block, Generator, SEA_LEVEL, TICK_SECONDS};
 
 use crate::camera::{Camera, Perspective};
 use crate::chunks::{ChunkManager, Edits};
+use crate::hand::{HandAnimation, view_angles};
 use crate::item_render;
 use crate::mesh::MeshData;
 use crate::particles::Particles;
@@ -33,10 +34,6 @@ const MENU_SEED: u32 = 1337;
 const MAX_TICKS_PER_FRAME: u32 = 10;
 /// View bobbing strength; 1.0 is vanilla.
 const VIEW_BOB_STRENGTH: f32 = 0.7;
-/// How fast the hand lowers and rises when switching items, per second.
-const EQUIP_SPEED: f32 = 0.4 * 20.0;
-/// Seconds for a full arm swing.
-const SWING_SECONDS: f32 = 0.2;
 /// FOV multiplier while sprinting, like vanilla.
 const SPRINT_FOV: f32 = 1.1;
 /// Zoom while holding C, like OptiFine; the mouse wheel changes it.
@@ -83,12 +80,8 @@ pub struct Session {
     /// Delays between breaking or placing blocks while a button is held.
     pub break_cooldown: f32,
     pub place_cooldown: f32,
-    /// Arm swing progress, 0 when idle.
-    pub swing: f32,
-    /// What the first-person hand shows (None = bare arm) and how far it is
-    /// raised (1 = in place, 0 = out of view below the screen).
-    pub shown_item: Option<Block>,
-    pub equip: f32,
+    /// The first-person hand's swing and switching animation.
+    pub hand: HandAnimation,
     /// Smoothed FOV multipliers for sprinting and zooming.
     pub sprint_fov: f32,
     pub zoom_fov: f32,
@@ -156,9 +149,7 @@ impl Session {
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
-            swing: 0.0,
-            shown_item: None,
-            equip: 1.0,
+            hand: HandAnimation::new(Vec2::ZERO),
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
@@ -180,6 +171,7 @@ impl Session {
         let inventory = entry.save.player.as_ref().map(PlayerSave::load_inventory).unwrap_or_default();
         let edits = entry.read_edits();
         let (game_mode, previous_game_mode) = (entry.save.game_mode, entry.save.previous_game_mode);
+        let hand = HandAnimation::new(view_angles(&camera));
         let mut session = Self {
             chunks: ChunkManager::new(generator, layers.clone(), options.render_distance, edits),
             day: DayCycle { time: time_override().unwrap_or(entry.save.time_of_day) },
@@ -197,9 +189,7 @@ impl Session {
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
-            swing: 0.0,
-            shown_item: None,
-            equip: 1.0,
+            hand,
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
@@ -261,6 +251,7 @@ impl Session {
     /// get picked up, splashes and particles play.
     fn tick(&mut self, controls: Controls) {
         self.chunks.tick();
+        self.hand.tick(self.inventory.selected_stack().map(|s| s.block), view_angles(&self.camera));
         let chunks = &self.chunks;
         let world = |pos| chunks.block_at(pos);
         if let Some(player) = &mut self.player {
@@ -309,22 +300,6 @@ impl Session {
             [0.1, 0.9, EYE_HEIGHT - 0.1].map(|dy| self.light_at(feet + Vec3::Y * dy)).into_iter().fold(1.0, f32::min);
         let rate = if target < self.player_light { 8.0 } else { 2.5 };
         self.player_light += (target - self.player_light) * (dt * rate).min(1.0);
-
-        // Switching items lowers the hand out of view, swaps what it shows,
-        // then raises it again, like vanilla (0.4 of the way per tick).
-        let held = self.inventory.selected_stack().map(|s| s.block);
-        let target = if held == self.shown_item { 1.0 } else { 0.0 };
-        let step = EQUIP_SPEED * dt;
-        self.equip += (target - self.equip).clamp(-step, step);
-        if self.equip < 0.1 {
-            self.shown_item = held;
-        }
-        if self.swing > 0.0 {
-            self.swing += dt / SWING_SECONDS;
-            if self.swing >= 1.0 {
-                self.swing = 0.0;
-            }
-        }
     }
 
     /// Switches game mode, remembering the old one for F3+F4.
@@ -361,15 +336,15 @@ impl Session {
         self.place_cooldown = (self.place_cooldown - dt).max(0.0);
         let chunks = &self.chunks;
         let Some(hit) = raycast(eye, self.camera.forward(), REACH, |pos| chunks.block_at(pos)) else {
-            self.breaking = None;
+            self.stop_breaking();
             return None;
         };
 
         let target = chunks.block_at(hit.block).unwrap_or(Block::Air);
         // Like vanilla, the arm keeps swinging while attacking a block, even
         // in the pause between one block breaking and the next.
-        if attack && self.swing == 0.0 {
-            self.start_swing();
+        if attack && target != Block::Air {
+            self.hand.swing();
         }
         let mode = self.game_mode;
         let attack = attack && mode.may_build();
@@ -407,7 +382,7 @@ impl Session {
                     }
                 }
             }
-            _ => self.breaking = None,
+            _ => self.stop_breaking(),
         }
 
         if use_item && mode.may_build() && self.place_cooldown == 0.0 && hit.normal != IVec3::ZERO {
@@ -423,7 +398,11 @@ impl Session {
                 if !mode.is_creative() {
                     self.inventory.take_selected();
                 }
-                self.start_swing();
+                self.hand.swing();
+                // The hand drops and rises again, unless the stack ran out.
+                if self.inventory.selected_stack().is_some() {
+                    self.hand.item_used();
+                }
                 // Vanilla repeats placement every 4 ticks while held.
                 self.place_cooldown = 0.2;
             }
@@ -537,7 +516,7 @@ impl Session {
         // Steve's right hand in third person.
         if let (Some(hand), Some(pose), false) = (self.hand(), self.pose(), spectator) {
             if perspective == Perspective::FirstPerson {
-                match self.shown_item {
+                match self.hand.shown {
                     Some(block) => {
                         scene.held.push_block(block, layers, player::held_block_first_person(&hand), hand.light)
                     }
@@ -558,9 +537,24 @@ impl Session {
         self.zoom_level = (self.zoom_level * ZOOM_STEP.powf(notches)).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
-    pub fn start_swing(&mut self) {
-        if self.swing == 0.0 || self.swing > 0.5 {
-            self.swing = f32::EPSILON;
+    /// A click to attack (vanilla's startAttack): swings the arm, and
+    /// missing every block makes the hand dip like after any attack.
+    pub fn start_attack(&mut self) {
+        if let Some(player) = &self.player {
+            let chunks = &self.chunks;
+            let eye = player.eye(self.partial());
+            let hit = raycast(eye, self.camera.forward(), REACH, |pos| chunks.block_at(pos));
+            if hit.is_none() {
+                self.hand.reset_attack_strength();
+            }
+        }
+        self.hand.swing();
+    }
+
+    /// Gives up on the block being broken, if any; the hand dips like vanilla.
+    fn stop_breaking(&mut self) {
+        if self.breaking.take().is_some() {
+            self.hand.reset_attack_strength();
         }
     }
 
@@ -586,18 +580,20 @@ impl Session {
 
     pub fn hand(&self) -> Option<HandPose> {
         let player = self.player.as_ref()?;
-        let (walk, bob) = player.bobbing(self.partial());
-        let phase = walk * std::f32::consts::PI;
+        let partial = self.partial();
+        // Vanilla's hand bobs a tick ahead of the interpolated walk.
+        let (walk, _) = player.bobbing(1.0 + partial);
+        let (_, bob) = player.bobbing(partial);
         Some(HandPose {
-            eye: player.eye(self.partial()),
-            yaw: self.camera.yaw,
-            pitch: self.camera.pitch,
-            swing: self.swing,
-            bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
-            light: self.player_light,
-            equip: self.equip,
-            aspect: self.camera.aspect(),
+            view: self.camera.view(),
             fov_y: self.camera.fov_y() / self.zoom_fov,
+            swing: self.hand.swing_progress(partial),
+            lowered: self.hand.lowered(partial),
+            sway: self.hand.sway(view_angles(&self.camera), partial),
+            walk,
+            bob: bob * VIEW_BOB_STRENGTH,
+            light: self.player_light,
+            aspect: self.camera.aspect(),
         })
     }
 }

@@ -195,7 +195,7 @@ impl ApplicationHandler for App {
                 }
                 if state.playing() {
                     if state.mouse_grabbed {
-                        state.session.start_swing();
+                        state.session.start_attack();
                     } else {
                         state.set_mouse_grab(true);
                     }
@@ -551,7 +551,8 @@ impl State {
             *slot = Some(stack);
         }
         session.inventory.selected = script.selected.min(8);
-        session.shown_item = session.inventory.selected_stack().map(|s| s.block);
+        let view = crate::hand::view_angles(&session.camera);
+        session.hand.settle(session.inventory.selected_stack().map(|s| s.block), view);
         for (a, b, block) in blocks.fills {
             let (min, max) = (a.min(b), a.max(b));
             for y in min.y..=max.y {

@@ -5,6 +5,7 @@ mod clouds;
 mod debug;
 mod frustum;
 mod gpu;
+mod hand;
 mod hud;
 mod input;
 mod inventory_screen;

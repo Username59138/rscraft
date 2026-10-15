@@ -107,12 +107,16 @@ impl Camera {
         camera
     }
 
-    pub fn view_proj(&self) -> Mat4 {
+    /// World to view space, view bobbing included.
+    pub fn view(&self) -> Mat4 {
         let pitch = self.pitch - self.bob_pitch;
         let forward = Vec3::new(self.yaw.sin() * pitch.cos(), pitch.sin(), -self.yaw.cos() * pitch.cos());
-        let view = Mat4::from_rotation_z(self.bob_roll) * view::look_to_mat4(self.position, forward, Vec3::Y);
+        Mat4::from_rotation_z(self.bob_roll) * view::look_to_mat4(self.position, forward, Vec3::Y)
+    }
+
+    pub fn view_proj(&self) -> Mat4 {
         // wgpu's clip space matches DirectX: depth 0..1, Y up.
         let proj = proj::directx::perspective(self.fov_y, self.aspect, self.near, self.far);
-        proj * view
+        proj * self.view()
     }
 }
