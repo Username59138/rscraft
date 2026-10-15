@@ -272,16 +272,6 @@ impl Session {
     pub fn update_view(&mut self, dt: f32, fov: f32, zoom: bool) {
         let partial = self.partial();
         let Some(player) = &self.player else { return };
-        // View bobbing, like vanilla: sway sideways and dip at every step.
-        let (walk, bob) = player.bobbing(partial);
-        let bob = bob * VIEW_BOB_STRENGTH;
-        let phase = walk * std::f32::consts::PI;
-        let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
-        self.camera.position = player.eye(partial) + offset;
-        // Plus vanilla's small tilt: a sideways roll (3°) and a nod (5°) per step.
-        self.camera.bob_roll = (phase.sin() * bob * 3.0).to_radians();
-        self.camera.bob_pitch = ((phase - 0.2).cos() * bob * 5.0).abs().to_radians();
-
         let smoothing = (dt * 12.0).min(1.0);
         let sprint = if player.sprinting { SPRINT_FOV } else { 1.0 };
         self.sprint_fov += (sprint - self.sprint_fov) * smoothing;
@@ -291,6 +281,16 @@ impl Session {
         let zoom_target = if zoom { 1.0 / self.zoom_level } else { 1.0 };
         self.zoom_fov += (zoom_target - self.zoom_fov) * smoothing;
         self.camera.set_fov(fov * self.sprint_fov * self.zoom_fov);
+
+        // View bobbing, like vanilla: sway sideways and dip at every step.
+        let (walk, bob) = player.bobbing(partial);
+        let bob = bob * self.bob_strength();
+        let phase = walk * std::f32::consts::PI;
+        let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
+        self.camera.position = player.eye(partial) + offset;
+        // Plus vanilla's small tilt: a sideways roll (3°) and a nod (5°) per step.
+        self.camera.bob_roll = (phase.sin() * bob * 3.0).to_radians();
+        self.camera.bob_pitch = ((phase - 0.2).cos() * bob * 5.0).abs().to_radians();
 
         // The darkest of the blocks the player's body is in (feet, middle,
         // eyes), so standing half under a ledge or canopy already shades
@@ -532,6 +532,12 @@ impl Session {
         scene
     }
 
+    /// View bobbing strength. Zooming magnifies the bobbing as much as the
+    /// view, so it is scaled down by the zoom to shake no more than usual.
+    fn bob_strength(&self) -> f32 {
+        VIEW_BOB_STRENGTH * self.zoom_fov
+    }
+
     /// Mouse wheel while zooming: positive notches zoom in.
     pub fn scroll_zoom(&mut self, notches: f32) {
         self.zoom_level = (self.zoom_level * ZOOM_STEP.powf(notches)).clamp(MIN_ZOOM, MAX_ZOOM);
@@ -591,7 +597,7 @@ impl Session {
             lowered: self.hand.lowered(partial),
             sway: self.hand.sway(view_angles(&self.camera), partial),
             walk,
-            bob: bob * VIEW_BOB_STRENGTH,
+            bob: bob * self.bob_strength(),
             light: self.player_light,
             aspect: self.camera.aspect(),
         })
