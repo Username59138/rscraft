@@ -302,6 +302,11 @@ impl Session {
         }
     }
 
+    /// Sky light level (0..1) at a position, for lighting entities.
+    fn light_at(&self, pos: Vec3) -> f32 {
+        self.chunks.sky_light_at(pos.floor().as_ivec3()) as f32 / rscraft_world::MAX_LIGHT as f32
+    }
+
     fn pose(&self) -> Option<PlayerPose> {
         let player = self.player.as_ref()?;
         let (walk, bob) = player.bobbing();
@@ -310,6 +315,7 @@ impl Session {
             yaw: self.camera.yaw,
             head_pitch: self.camera.pitch,
             swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
+            light: self.light_at(player.eye()),
         })
     }
 
@@ -323,6 +329,7 @@ impl Session {
             pitch: self.camera.pitch,
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
+            light: self.light_at(player.eye()),
             fov_y: self.camera.fov_y() / self.zoom_fov,
         })
     }
@@ -682,7 +689,7 @@ impl State {
                     crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
                 })
                 .as_ref(),
-            &self.session.items.build_mesh(&self.layers, seconds),
+            &self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p)),
             &self.ui.vertices,
             [self.ui.width, self.ui.height],
         );

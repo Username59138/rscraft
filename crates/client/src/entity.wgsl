@@ -5,6 +5,7 @@ struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) normal: vec3<f32>,
+    @location(3) light: f32,
 };
 
 struct VertexOut {
@@ -23,7 +24,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // Entities get soft directional shading instead of fixed per-face values.
     let n = normalize(in.normal);
     let shade = 0.6 + 0.4 * max(n.y, 0.0) + 0.2 * abs(n.z) - 0.1 * max(-n.y, 0.0);
-    out.light = gamma_light(clamp(shade, 0.4, 1.0) * globals.zenith.w);
+    // Lit by the sky light where the entity is, like blocks.
+    let sky = light_brightness(in.light) * globals.zenith.w;
+    out.light = gamma_light(clamp(shade, 0.4, 1.0) * max(sky, 0.05));
     return out;
 }
 

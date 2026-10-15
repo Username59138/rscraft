@@ -125,4 +125,38 @@ impl LightRegion {
         }
         self.light[(((y - self.y0) * REGION + rz) * REGION + rx) as usize]
     }
+
+    /// Just the centre column's light, to keep for lighting entities.
+    pub fn column(&self) -> ColumnLight {
+        let mut light = Vec::with_capacity(((self.y1 - self.y0).max(0) * SECTION_SIZE * SECTION_SIZE) as usize);
+        for y in self.y0..self.y1 {
+            for z in 0..SECTION_SIZE {
+                for x in 0..SECTION_SIZE {
+                    light.push(self.get(x, y, z));
+                }
+            }
+        }
+        ColumnLight { y0: self.y0, y1: self.y1, light }
+    }
+}
+
+/// Sky light of a single 16×16 column, with the same layout and limits as
+/// [`LightRegion`]. Coordinates are local on X/Z (0..16) and world Y.
+#[derive(Clone, Debug)]
+pub struct ColumnLight {
+    y0: i32,
+    y1: i32,
+    light: Vec<u8>,
+}
+
+impl ColumnLight {
+    pub fn get(&self, x: i32, y: i32, z: i32) -> u8 {
+        if y >= self.y1 {
+            MAX_LIGHT
+        } else if y < self.y0 {
+            0
+        } else {
+            self.light[(((y - self.y0) * SECTION_SIZE + z) * SECTION_SIZE + x) as usize]
+        }
+    }
 }

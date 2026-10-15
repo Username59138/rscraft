@@ -18,6 +18,8 @@ pub struct EntityVertex {
     pub position: [f32; 3],
     pub uv: [f32; 2],
     pub normal: [f32; 3],
+    /// Sky light level at the entity, 0..1.
+    pub light: f32,
 }
 
 /// Everything needed to pose the model.
@@ -27,6 +29,8 @@ pub struct PlayerPose {
     pub head_pitch: f32,
     /// Limb swing angle in radians (positive = right arm forward).
     pub swing: f32,
+    /// Sky light level at the player, 0..1.
+    pub light: f32,
 }
 
 /// A box of the model in model pixels (Y up from the feet, front towards -Z,
@@ -61,7 +65,7 @@ fn face_region(face: Face, [u, v]: [f32; 2], [w, h, d]: [f32; 3]) -> [f32; 4] {
     }
 }
 
-fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32, transform: Mat4) {
+fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32, transform: Mat4, light: f32) {
     const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     let min = Vec3::from(part.min) - inflate;
     let size = Vec3::from(part.size) + inflate * 2.0;
@@ -81,6 +85,7 @@ fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32
                 position: transform.transform_point3(min + corner * size).to_array(),
                 uv: [(ru + cu * rw) / SKIN_SIZE, (rv + cv * rh) / SKIN_SIZE],
                 normal: normal.to_array(),
+                light,
             }
         });
         out.extend_from_slice(&[quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
@@ -100,6 +105,8 @@ pub struct HandPose {
     pub swing: f32,
     /// View bobbing offset in view space.
     pub bob: Vec3,
+    /// Sky light level at the player, 0..1.
+    pub light: f32,
     /// Vertical FOV in radians without the zoom; the hand is drawn as if it
     /// were 70°, so it zooms together with the world but ignores sprinting
     /// and the FOV setting.
@@ -131,8 +138,9 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
     let k = (pose.fov_y / 2.0).tan() / (HAND_FOV / 2.0).tan();
     let transform = view * Mat4::from_scale(Vec3::new(k, k, 1.0)) * arm;
     let mut out = Vec::with_capacity(72);
-    push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.uv, 0.0, transform);
-    push_box(&mut out, &FIRST_PERSON_ARM, FIRST_PERSON_ARM.overlay_uv, FIRST_PERSON_ARM.overlay_inflate, transform);
+    let arm = &FIRST_PERSON_ARM;
+    push_box(&mut out, arm, arm.uv, 0.0, transform, pose.light);
+    push_box(&mut out, arm, arm.overlay_uv, arm.overlay_inflate, transform, pose.light);
     out
 }
 
@@ -154,8 +162,8 @@ pub fn build_mesh(pose: &PlayerPose) -> Vec<EntityVertex> {
     let mut out = Vec::with_capacity(parts.len() * 2 * 36);
     for (part, angle) in parts {
         let transform = rotated(part, angle);
-        push_box(&mut out, part, part.uv, 0.0, transform);
-        push_box(&mut out, part, part.overlay_uv, part.overlay_inflate, transform);
+        push_box(&mut out, part, part.uv, 0.0, transform, pose.light);
+        push_box(&mut out, part, part.overlay_uv, part.overlay_inflate, transform, pose.light);
     }
     out
 }
@@ -242,7 +250,7 @@ impl PlayerRenderer {
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<EntityVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32],
                 })],
                 compilation_options: Default::default(),
             },

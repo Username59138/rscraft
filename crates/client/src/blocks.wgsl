@@ -18,13 +18,6 @@ struct VertexOut {
     @location(3) world_pos: vec3<f32>,
 };
 
-/// Minecraft's light curve at the default 50% brightness setting.
-fn light_brightness(level: f32) -> f32 {
-    let dim = level / (4.0 - 3.0 * level);
-    let bright = 1.0 - pow(1.0 - dim, 4.0);
-    return mix(dim, bright, 0.5);
-}
-
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;

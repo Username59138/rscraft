@@ -8,7 +8,7 @@ pub mod section;
 
 pub use block::{Block, Face, FaceTexture, RenderLayer, Tint};
 pub use generator::Generator;
-pub use light::{ColumnGroup, LightRegion, MAX_LIGHT};
+pub use light::{ColumnGroup, ColumnLight, LightRegion, MAX_LIGHT};
 pub use section::{SECTION_SIZE, SECTION_VOLUME, Section};
 
 /// World height range, matching Minecraft's overworld.

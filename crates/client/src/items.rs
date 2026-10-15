@@ -108,12 +108,14 @@ impl Items {
     }
 
     /// Spinning, bobbing cubes, ready to draw with the solid block pipeline.
-    pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32) -> MeshData {
+    /// `light` gives the sky light level (0..1) at a position.
+    pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32, light: impl Fn(Vec3) -> f32) -> MeshData {
         let mut mesh = MeshData::default();
         for (i, (item, position)) in self.items.iter().zip(self.render_positions()).enumerate() {
             let start = mesh.vertices.len();
+            let level = light(position);
             for face in Face::ALL {
-                mesh.push_face(IVec3::ZERO, face, layers.get(item.block, face), [3; 4], [1.0; 4], 1.0);
+                mesh.push_face(IVec3::ZERO, face, layers.get(item.block, face), [3; 4], [level; 4], 1.0);
             }
             let phase = seconds + i as f32 * 1.7;
             let bob = (phase * 2.0).sin() * 0.05 + 0.1;

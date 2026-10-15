@@ -42,6 +42,14 @@ fn srgb_alpha(alpha: f32) -> f32 {
     return 1.0 - pow(1.0 - clamp(alpha, 0.0, 1.0), 2.2);
 }
 
+/// Minecraft's light curve at the default 50% brightness setting, for a sky
+/// light level 0..1, scaled by the time of day.
+fn light_brightness(level: f32) -> f32 {
+    let dim = level / (4.0 - 3.0 * level);
+    let bright = 1.0 - pow(1.0 - dim, 4.0);
+    return mix(dim, bright, 0.5);
+}
+
 /// Cylindrical fog like Minecraft: horizontal distance only.
 fn fog_factor(world_pos: vec3<f32>) -> f32 {
     let dist = distance(world_pos.xz, globals.camera_pos.xz);

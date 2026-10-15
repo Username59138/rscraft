@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
-use rscraft_world::{Block, ColumnGroup, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
+use rscraft_world::{Block, ColumnGroup, ColumnLight, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
 
 use crate::mesh::{Neighborhood, SectionMesh};
 use crate::renderer::Renderer;
@@ -47,6 +47,10 @@ pub struct ChunkManager {
     generated_rx: Receiver<(IVec2, Vec<Section>)>,
     meshed_tx: Sender<(IVec3, u32, SectionMesh)>,
     meshed_rx: Receiver<(IVec3, u32, SectionMesh)>,
+    /// Sky light of each meshed column, for lighting entities.
+    light: HashMap<IVec2, ColumnLight>,
+    lit_tx: Sender<(IVec2, u32, ColumnLight)>,
+    lit_rx: Receiver<(IVec2, u32, ColumnLight)>,
 }
 
 pub fn column_of(position: Vec3) -> IVec2 {
@@ -58,6 +62,7 @@ impl ChunkManager {
         let load_order = Self::load_order(render_distance);
         let (generated_tx, generated_rx) = crossbeam_channel::unbounded();
         let (meshed_tx, meshed_rx) = crossbeam_channel::unbounded();
+        let (lit_tx, lit_rx) = crossbeam_channel::unbounded();
         Self {
             generator,
             layers,
@@ -72,6 +77,9 @@ impl ChunkManager {
             generated_rx,
             meshed_tx,
             meshed_rx,
+            light: HashMap::new(),
+            lit_tx,
+            lit_rx,
         }
     }
 
@@ -125,6 +133,14 @@ impl ChunkManager {
         &self.edits
     }
 
+    /// Sky light level (0..=15) at a world position; full light where it
+    /// isn't known yet.
+    pub fn sky_light_at(&self, pos: IVec3) -> u8 {
+        let column = IVec2::new(pos.x, pos.z).div_euclid(IVec2::splat(SECTION_SIZE));
+        let local = IVec2::new(pos.x, pos.z).rem_euclid(IVec2::splat(SECTION_SIZE));
+        self.light.get(&column).map_or(rscraft_world::MAX_LIGHT, |l| l.get(local.x, pos.y, local.y))
+    }
+
     pub fn loaded_columns(&self) -> usize {
         self.columns.len()
     }
@@ -168,6 +184,11 @@ impl ChunkManager {
     }
 
     fn receive_meshes(&mut self, renderer: &mut Renderer) {
+        while let Ok((column, version, light)) = self.lit_rx.try_recv() {
+            if self.columns.contains_key(&column) && self.mesh_versions.get(&column) == Some(&version) {
+                self.light.insert(column, light);
+            }
+        }
         while let Ok((pos, version, mesh)) = self.meshed_rx.try_recv() {
             // Drop meshes of unloaded columns and of outdated jobs.
             let column = IVec2::new(pos.x, pos.z);
@@ -187,6 +208,7 @@ impl ChunkManager {
         for column in far {
             self.columns.remove(&column);
             self.mesh_versions.remove(&column);
+            self.light.remove(&column);
             for i in 0..SECTIONS_PER_COLUMN as i32 {
                 self.sections.remove(&IVec3::new(column.x, MIN_SECTION_Y + i, column.y));
             }
@@ -219,12 +241,14 @@ impl ChunkManager {
             });
             let layers = self.layers.clone();
             let tx = self.meshed_tx.clone();
+            let lit_tx = self.lit_tx.clone();
             let version = self.mesh_versions.entry(column).or_insert(0);
             *version += 1;
             let version = *version;
             // Light needs the whole 3×3 group, so a column is lit and meshed in one job.
             rayon::spawn(move || {
                 let light = LightRegion::compute(&columns);
+                let _ = lit_tx.send((column, version, light.column()));
                 for (index, section) in columns[4].iter().enumerate() {
                     let pos = IVec3::new(column.x, MIN_SECTION_Y + index as i32, column.y);
                     // Empty sections are sent too, so a re-mesh clears what was dug out.
