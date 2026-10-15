@@ -18,29 +18,49 @@ struct VertexOut {
     @location(3) world_pos: vec3<f32>,
 };
 
-fn vertex(in: VertexIn, shade: f32) -> VertexOut {
+fn vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, ao: f32, sky_light: f32, shade: f32) -> VertexOut {
     var out: VertexOut;
-    out.clip_position = globals.view_proj * vec4<f32>(in.position, 1.0);
-    out.uv = in.uv;
-    out.layer = in.layer;
-    out.world_pos = in.position;
+    out.clip_position = globals.view_proj * vec4<f32>(position, 1.0);
+    out.uv = uv;
+    out.layer = layer;
+    out.world_pos = position;
     // Sky light is scaled by the time of day; a little ambient keeps caves from pitch black.
-    let sky = light_brightness(in.sky) * globals.zenith.w;
-    out.light = gamma_light(shade * in.ao * max(sky, 0.05));
+    let sky = light_brightness(sky_light) * globals.zenith.w;
+    out.light = gamma_light(shade * ao * max(sky, 0.05));
     return out;
+}
+
+/// Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
+fn face_shade(n: vec3<f32>) -> f32 {
+    return 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z);
 }
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
-    // Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
-    let n = in.normal;
-    return vertex(in, 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z));
+    return vertex(in.position, in.uv, in.layer, in.ao, in.sky, face_shade(in.normal));
 }
 
 /// Blocks drawn as items (dropped, held): lit like entities, not like terrain.
 @vertex
 fn vs_item(in: VertexIn) -> VertexOut {
-    return vertex(in, entity_shade(in.normal));
+    return vertex(in.position, in.uv, in.layer, in.ao, in.sky, entity_shade(in.normal));
+}
+
+/// The compact vertices of terrain sections (`TerrainVertex`).
+struct TerrainIn {
+    /// Section-local position in 1/2048 blocks, then the texture layer.
+    @location(0) position: vec4<u32>,
+    @location(1) uv: vec2<f32>,
+    /// Face shade, ambient occlusion, sky light.
+    @location(2) light: vec4<f32>,
+    /// Per instance: the section's origin in blocks.
+    @location(3) origin: vec4<i32>,
+};
+
+@vertex
+fn vs_terrain(in: TerrainIn) -> VertexOut {
+    let position = vec3<f32>(in.origin.xyz) + vec3<f32>(in.position.xyz) / 2048.0;
+    return vertex(position, in.uv, in.position.w, in.light.y, in.light.z, in.light.x);
 }
 
 fn shaded(in: VertexOut) -> vec4<f32> {

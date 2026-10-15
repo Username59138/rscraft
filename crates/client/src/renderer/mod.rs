@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -11,14 +10,16 @@ use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
 mod preview;
+mod terrain;
 
 pub use preview::{PREVIEW_DEPTH, Preview};
+use terrain::TerrainRenderer;
 
 use crate::camera::Camera;
 use crate::clouds::CloudRenderer;
 use crate::frustum::Frustum;
 use crate::gpu::{self, Depth, PipelineDesc};
-use crate::mesh::{MeshData, SectionMesh, Vertex};
+use crate::mesh::{MeshData, SectionMesh, TerrainVertex, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
 use crate::saves::Options;
 use crate::selection::{Selection, SelectionRenderer};
@@ -133,19 +134,14 @@ impl GpuMesh {
     }
 }
 
-struct GpuSection {
-    solid: Option<GpuMesh>,
-    translucent: Option<GpuMesh>,
-}
-
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
-    solid_pipeline: wgpu::RenderPipeline,
-    translucent_pipeline: wgpu::RenderPipeline,
+    /// Particles: blocks' pipeline with float vertices.
+    particle_pipeline: wgpu::RenderPipeline,
     crack_pipeline: wgpu::RenderPipeline,
     item_pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
@@ -160,7 +156,7 @@ pub struct Renderer {
     shadows: ShadowRenderer,
     selection: SelectionRenderer,
     ui: UiRenderer,
-    sections: HashMap<IVec3, GpuSection>,
+    terrain: TerrainRenderer,
     fog_end: f32,
     /// Sections drawn in the last frame, for the debug screen.
     pub drawn_sections: usize,
@@ -202,6 +198,8 @@ impl Renderer {
                 label: Some("rscraft device"),
                 // Downlevel limits keep the door open for old GPUs and WebGL2.
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                // Lets terrain be drawn with one indirect multi-draw per page.
+                required_features: adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE,
                 ..Default::default()
             })
             .await
@@ -282,12 +280,13 @@ impl Renderer {
             },
             alpha: wgpu::BlendComponent::OVER,
         };
-        let buffers = [Some(Vertex::layout())];
-        let pipeline = |label, vertex, fragment, blend, translucent: bool| {
+        let float_buffers = [Some(Vertex::layout())];
+        let terrain_buffers = [Some(TerrainVertex::layout()), Some(TerrainRenderer::instance_layout())];
+        let pipeline = |label, buffers, vertex, fragment, blend, translucent: bool| {
             PipelineDesc {
                 vertex,
                 fragment,
-                buffers: &buffers,
+                buffers,
                 blend,
                 // Water must be visible from below too.
                 cull: if translucent { None } else { Some(wgpu::Face::Back) },
@@ -300,11 +299,17 @@ impl Renderer {
             }
             .build(&device)
         };
-        let solid_pipeline = pipeline("solid pipeline", "vs_main", "fs_solid", wgpu::BlendState::REPLACE, false);
-        let item_pipeline = pipeline("item pipeline", "vs_item", "fs_solid", wgpu::BlendState::REPLACE, false);
+        let (replace, alpha) = (wgpu::BlendState::REPLACE, wgpu::BlendState::ALPHA_BLENDING);
+        let solid_pipeline = pipeline("solid pipeline", &terrain_buffers, "vs_terrain", "fs_solid", replace, false);
         let translucent_pipeline =
-            pipeline("translucent pipeline", "vs_main", "fs_translucent", wgpu::BlendState::ALPHA_BLENDING, true);
-        let crack_pipeline = pipeline("crack pipeline", "vs_main", "fs_crack", multiply, true);
+            pipeline("translucent pipeline", &terrain_buffers, "vs_terrain", "fs_translucent", alpha, true);
+        let particle_pipeline = pipeline("particle pipeline", &float_buffers, "vs_main", "fs_solid", replace, false);
+        let item_pipeline = pipeline("item pipeline", &float_buffers, "vs_item", "fs_solid", replace, false);
+        let crack_pipeline = pipeline("crack pipeline", &float_buffers, "vs_main", "fs_crack", multiply, true);
+        let multi_draw = device.features().contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+            && adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION);
+        log::info!("terrain multi-draw: {multi_draw}");
+        let terrain = TerrainRenderer::new(&device, solid_pipeline, translucent_pipeline, multi_draw);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
         let clouds = CloudRenderer::new(&device, &sky_images.clouds, &globals_layout, config.format, DEPTH_FORMAT);
         let player =
@@ -320,8 +325,7 @@ impl Renderer {
             queue,
             config,
             depth_view,
-            solid_pipeline,
-            translucent_pipeline,
+            particle_pipeline,
             crack_pipeline,
             item_pipeline,
             globals_buffer,
@@ -336,7 +340,7 @@ impl Renderer {
             shadows,
             selection,
             ui,
-            sections: HashMap::new(),
+            terrain,
             fog_end: fog_end(render_distance),
             drawn_sections: 0,
             gpu: format!("{} ({:?})", info.name, info.backend),
@@ -375,7 +379,7 @@ impl Renderer {
 
     /// Drops every section, e.g. when switching worlds.
     pub fn clear_sections(&mut self) {
-        self.sections.clear();
+        self.terrain.clear();
     }
 
     /// Builds this frame's entity shadows; call before `render`.
@@ -384,23 +388,15 @@ impl Renderer {
     }
 
     pub fn total_sections(&self) -> usize {
-        self.sections.len()
+        self.terrain.len()
     }
 
     pub fn upload_section(&mut self, pos: IVec3, mesh: &SectionMesh) {
-        let section = GpuSection {
-            solid: GpuMesh::upload(&self.device, &mesh.solid),
-            translucent: GpuMesh::upload(&self.device, &mesh.translucent),
-        };
-        if section.solid.is_some() || section.translucent.is_some() {
-            self.sections.insert(pos, section);
-        } else {
-            self.sections.remove(&pos);
-        }
+        self.terrain.upload(&self.device, &self.queue, pos, mesh);
     }
 
     pub fn remove_column(&mut self, column: IVec2) {
-        self.sections.retain(|pos, _| pos.x != column.x || pos.z != column.y);
+        self.terrain.remove_column(column);
     }
 
     pub fn render(&mut self, frame: Frame<'_>) {
@@ -444,17 +440,7 @@ impl Renderer {
         self.queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
         let frustum = Frustum::from_view_proj(view_proj);
-        let size = SECTION_SIZE as f32;
-        let visible: Vec<&GpuSection> = self
-            .sections
-            .iter()
-            .filter(|(pos, _)| {
-                let min = pos.as_vec3() * size;
-                frustum.intersects_aabb(min, min + Vec3::splat(size))
-            })
-            .map(|(_, s)| s)
-            .collect();
-        self.drawn_sections = visible.len();
+        self.drawn_sections = self.terrain.prepare(&self.device, &self.queue, &frustum, camera.position);
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -481,11 +467,9 @@ impl Renderer {
             self.sky.draw(&mut pass);
 
             pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            pass.set_pipeline(&self.solid_pipeline);
-            for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
-                mesh.draw(&mut pass);
-            }
+            self.terrain.draw_solid(&mut pass);
             if let Some(particles) = &particles {
+                pass.set_pipeline(&self.particle_pipeline);
                 particles.draw(&mut pass);
             }
             if let Some(items) = &items {
@@ -501,10 +485,7 @@ impl Renderer {
 
             // Translucent geometry goes last, over the finished opaque scene.
             pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            pass.set_pipeline(&self.translucent_pipeline);
-            for mesh in visible.iter().filter_map(|s| s.translucent.as_ref()) {
-                mesh.draw(&mut pass);
-            }
+            self.terrain.draw_translucent(&mut pass);
             pass.set_pipeline(&self.crack_pipeline);
             self.selection.draw_crack(&mut pass);
             self.selection.draw_outline(&mut pass);

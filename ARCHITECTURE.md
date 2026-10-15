@@ -25,7 +25,9 @@ Dependencies only point downwards in this list.
 - `chunks.rs` — loading, generating, lighting and meshing columns around
   the player on a thread pool.
 - `renderer/` — everything wgpu: terrain passes, sky, clouds, entities,
-  selection, shadows, GUI, the inventory player preview. Shared pipeline
+  selection, shadows, GUI, the inventory player preview. Terrain
+  (`renderer/terrain.rs`) uses compact 16-byte vertices packed into shared
+  pages and is drawn with one indirect multi-draw per page. Shared pipeline
   boilerplate lives in `gpu.rs`; shaders in `shaders/` (`common.wgsl` is
   prepended to every world shader).
 - `ui/` — an immediate-mode GUI drawn with Minecraft's sprites and font.

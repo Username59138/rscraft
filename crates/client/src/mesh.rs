@@ -34,6 +34,35 @@ impl Vertex {
     }
 }
 
+/// Compact vertex of a terrain section, 16 bytes. Positions are relative to
+/// the section's origin, which comes from a per-instance attribute.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct TerrainVertex {
+    /// x, y, z in 1/`POSITION_SCALE` blocks, then the texture layer.
+    pub position: [u16; 4],
+    /// Texture coordinates, 0..1 as 0..65535.
+    pub uv: [u16; 2],
+    /// Face shade, ambient occlusion and sky light, 0..1 as 0..255.
+    pub light: [u8; 4],
+}
+
+/// Sub-block steps of a terrain vertex position; must match the shader.
+pub const POSITION_SCALE: f32 = 2048.0;
+
+impl TerrainVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Uint16x4, 1 => Unorm16x2, 2 => Unorm8x4];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<TerrainVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 /// Height of a still water surface, like vanilla (8/9 of a block).
 const WATER_SURFACE: f32 = 8.0 / 9.0;
 
@@ -53,6 +82,70 @@ pub fn corners(face: Face) -> [[f32; 3]; 4] {
     }
 }
 
+/// Corners and texture coordinates of `face`, with the top lowered to
+/// `height` (water surfaces; 1.0 is a full block).
+fn face_vertices(face: Face, height: f32) -> [([f32; 3], [f32; 2]); 4] {
+    const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    let mut out = [([0.0; 3], [0.0; 2]); 4];
+    for (i, (mut corner, mut uv)) in corners(face).into_iter().zip(UVS).enumerate() {
+        if corner[1] > 0.5 {
+            corner[1] = height;
+            // Crop side textures instead of squashing them.
+            if face != Face::Up && face != Face::Down {
+                uv[1] = 1.0 - height;
+            }
+        }
+        out[i] = (corner, uv);
+    }
+    out
+}
+
+/// Whether a quad must be split along its other diagonal: the one that keeps
+/// darkness in the corners; otherwise AO shows an ugly anisotropic streak.
+fn flip_quad(ao: [u8; 4]) -> bool {
+    (ao[0] as u32 + ao[2] as u32) < (ao[1] as u32 + ao[3] as u32)
+}
+
+/// Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
+fn face_shade(face: Face) -> f32 {
+    match face {
+        Face::Up => 1.0,
+        Face::Down => 0.5,
+        Face::East | Face::West => 0.6,
+        Face::South | Face::North => 0.8,
+    }
+}
+
+/// Appends one block face at section-local block position `pos` as four
+/// vertices; sections are drawn with a shared index buffer of quads.
+fn push_terrain_face(
+    out: &mut Vec<TerrainVertex>,
+    pos: IVec3,
+    face: Face,
+    layer: u32,
+    ao: [u8; 4],
+    sky: [f32; 4],
+    height: f32,
+) {
+    let unorm8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let shade = unorm8(face_shade(face));
+    let mut quad = [TerrainVertex::zeroed(); 4];
+    for (i, (corner, uv)) in face_vertices(face, height).into_iter().enumerate() {
+        let p = (pos.as_vec3() + Vec3::from(corner)) * POSITION_SCALE;
+        quad[i] = TerrainVertex {
+            position: [p.x as u16, p.y as u16, p.z as u16, layer as u16],
+            uv: uv.map(|c| (c * 65535.0).round() as u16),
+            light: [shade, unorm8(AO_CURVE[ao[i] as usize]), unorm8(sky[i]), 0],
+        };
+    }
+    // The shared indices split quads along 0-2; rotating the corners by one
+    // moves the split to the other diagonal.
+    if flip_quad(ao) {
+        quad.rotate_left(1);
+    }
+    out.extend_from_slice(&quad);
+}
+
 /// CPU-side mesh, ready to be uploaded to the GPU.
 #[derive(Default)]
 pub struct MeshData {
@@ -69,21 +162,12 @@ impl MeshData {
     /// ambient occlusion level (0..=3) and sky light (0..1) per corner.
     /// `height` lowers the top of the block (water surfaces); 1.0 is a full block.
     pub fn push_face(&mut self, pos: IVec3, face: Face, layer: u32, ao: [u8; 4], sky: [f32; 4], height: f32) {
-        const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-
         let base = self.vertices.len() as u32;
         let normal = face.offset().map(|c| c as f32);
         let origin = pos.as_vec3();
-        for (((mut corner, mut uv), ao), sky) in corners(face).into_iter().zip(UVS).zip(ao).zip(sky) {
-            if corner[1] > 0.5 {
-                corner[1] = height;
-                // Crop side textures instead of squashing them.
-                if face != Face::Up && face != Face::Down {
-                    uv[1] = 1.0 - height;
-                }
-            }
+        for (((corner, uv), ao), sky) in face_vertices(face, height).into_iter().zip(ao).zip(sky) {
             self.vertices.push(Vertex {
-                position: (origin + glam::Vec3::from(corner)).to_array(),
+                position: (origin + Vec3::from(corner)).to_array(),
                 uv,
                 normal,
                 layer,
@@ -91,12 +175,10 @@ impl MeshData {
                 sky,
             });
         }
-        // Split the quad along the diagonal that keeps darkness in the
-        // corners; otherwise AO shows an ugly anisotropic streak.
-        if ao[0] as u32 + ao[2] as u32 >= ao[1] as u32 + ao[3] as u32 {
-            self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        } else {
+        if flip_quad(ao) {
             self.indices.extend_from_slice(&[base + 1, base + 2, base + 3, base + 1, base + 3, base]);
+        } else {
+            self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
     }
 }
@@ -119,8 +201,9 @@ impl MeshData {
 /// Meshes of one section, split by render pass.
 #[derive(Default)]
 pub struct SectionMesh {
-    pub solid: MeshData,
-    pub translucent: MeshData,
+    /// Quads, four vertices each, positioned relative to the section origin.
+    pub solid: Vec<TerrainVertex>,
+    pub translucent: Vec<TerrainVertex>,
 }
 
 /// A section plus all 26 surrounding sections, enough for face culling and
@@ -210,7 +293,7 @@ impl Neighborhood {
         if center.is_empty() {
             return mesh;
         }
-        let origin = pos * SECTION_SIZE;
+        let origin_y = pos.y * SECTION_SIZE;
         for y in 0..SECTION_SIZE {
             for z in 0..SECTION_SIZE {
                 for x in 0..SECTION_SIZE {
@@ -223,13 +306,15 @@ impl Neighborhood {
                             continue;
                         }
                         let texture = layers.get(block, face);
-                        let (ao, sky) = self.face_lighting(local, face, light, origin.y);
+                        let (ao, sky) = self.face_lighting(local, face, light, origin_y);
                         match layer {
-                            RenderLayer::Solid => mesh.solid.push_face(origin + local, face, texture, ao, sky, 1.0),
+                            RenderLayer::Solid => {
+                                push_terrain_face(&mut mesh.solid, local, face, texture, ao, sky, 1.0)
+                            }
                             // No AO on water, it looks wrong on a flat surface.
                             RenderLayer::Translucent => {
                                 let height = if self.get(x, y + 1, z) == Block::Water { 1.0 } else { WATER_SURFACE };
-                                mesh.translucent.push_face(origin + local, face, texture, [3; 4], sky, height)
+                                push_terrain_face(&mut mesh.translucent, local, face, texture, [3; 4], sky, height)
                             }
                         }
                     }
