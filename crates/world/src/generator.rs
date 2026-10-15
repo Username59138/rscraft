@@ -137,7 +137,7 @@ impl Generator {
                         for dx in -radius..=radius {
                             let corner = dx.abs() == radius && dz.abs() == radius;
                             // Randomly trim corners so trees don't look like cubes.
-                            if corner && (y > top || hash(x + dx, z + dz, self.seed ^ y as u32) % 2 == 0) {
+                            if corner && (y > top || hash(x + dx, z + dz, self.seed ^ y as u32).is_multiple_of(2)) {
                                 continue;
                             }
                             set(x + dx, y, z + dz, Block::OakLeaves, false);

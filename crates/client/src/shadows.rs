@@ -103,7 +103,8 @@ impl ShadowRenderer {
             size,
         );
         let view = gpu_texture.create_view(&Default::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow sampler"), ..Default::default() });
+        let sampler =
+            device.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow sampler"), ..Default::default() });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow layout"),
             entries: &[

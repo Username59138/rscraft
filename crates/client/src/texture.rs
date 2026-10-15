@@ -57,7 +57,7 @@ struct Layer {
 impl Layer {
     fn new(frames: Vec<RgbaImage>, frametime: u32) -> Self {
         // Textures with fully transparent pixels are cut-outs (leaves).
-        let cutout = frames[0].pixels.chunks_exact(4).any(|p| p[3] == 0);
+        let cutout = frames[0].pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0);
         let frames = frames
             .into_iter()
             .map(|image| {
@@ -120,13 +120,21 @@ impl BlockImages {
         let mut particle = |name: &str, tint: [u8; 3]| {
             let image = jar
                 .as_deref_mut()
-                .and_then(|jar| jar.texture(&format!("particle/{name}")).map_err(|err| log::warn!("{name}: {err:#}")).ok())
+                .and_then(|jar| {
+                    jar.texture(&format!("particle/{name}")).map_err(|err| log::warn!("{name}: {err:#}")).ok()
+                })
                 .map_or_else(missing_texture, |image| image.resized(TEXTURE_SIZE, TEXTURE_SIZE));
             let image = RgbaImage {
-                pixels: image.pixels.chunks_exact(4).flat_map(|p| {
-                    let [r, g, b] = [0, 1, 2].map(|i| (p[i] as u16 * tint[i] as u16 / 255) as u8);
-                    [r, g, b, p[3]]
-                }).collect(),
+                pixels: image
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|p| {
+                        let [r, g, b] = [0, 1, 2].map(|i| (p[i] as u16 * tint[i] as u16 / 255) as u8);
+                        [r, g, b, p[3]]
+                    })
+                    .collect(),
                 ..image
             };
             images.push(Layer::new(vec![image], 1));
@@ -146,7 +154,8 @@ impl BlockImages {
 
     /// The top, south and east face images of a block, for inventory icons.
     pub fn icon_faces(&self, block: Block) -> [RgbaImage; 3] {
-        [Face::Up, Face::South, Face::East].map(|face| self.images[self.layers.get(block, face) as usize].frames[0][0].clone())
+        [Face::Up, Face::South, Face::East]
+            .map(|face| self.images[self.layers.get(block, face) as usize].frames[0][0].clone())
     }
 }
 
@@ -318,7 +327,7 @@ fn compose(jar: &mut ClientJar, texture: FaceTexture, tints: &Tints) -> anyhow::
                     }
                 }
                 (None, Some(tint)) => {
-                    for px in image.pixels.chunks_exact_mut(4) {
+                    for px in image.pixels.as_chunks_mut::<4>().0 {
                         let tinted = multiply([px[0], px[1], px[2], px[3]], tint);
                         px.copy_from_slice(&tinted);
                     }

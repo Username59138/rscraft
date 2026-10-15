@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, IVec3, Vec3};
+use rscraft_assets::RgbaImage;
 use rscraft_world::{Block, SECTION_SIZE};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
-use rscraft_assets::RgbaImage;
 use winit::window::Window;
 
 use crate::camera::Camera;
@@ -38,6 +38,35 @@ struct Globals {
     params: [f32; 4],
     water: [f32; 4],
     water_color: [f32; 4],
+}
+
+/// Everything drawn in one frame.
+pub struct Frame<'a> {
+    pub camera: &'a Camera,
+    pub sky: &'a SkyState,
+    /// Seconds since start, for animations.
+    pub seconds: f32,
+    /// The player's body (third person) and first-person hand.
+    pub player: Option<&'a [EntityVertex]>,
+    pub hand: Option<&'a [EntityVertex]>,
+    pub selection: Option<Selection>,
+    pub underwater: Option<Underwater>,
+    /// Dropped and third-person held items, particles, and the
+    /// first-person held block.
+    pub items: &'a MeshData,
+    pub particles: &'a MeshData,
+    pub held: &'a MeshData,
+    pub gui: GuiFrame<'a>,
+    pub preview: Option<&'a Preview>,
+}
+
+/// The interface for one frame.
+pub struct GuiFrame<'a> {
+    pub vertices: &'a [UiVertex],
+    /// Vertices drawn inverting what's behind them (the crosshair).
+    pub inverted: std::ops::Range<usize>,
+    /// Size in GUI units.
+    pub size: [f32; 2],
 }
 
 /// The player shown in the inventory screen's black box.
@@ -160,7 +189,8 @@ impl Renderer {
     ) -> Self {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)));
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)));
         let surface = instance.create_surface(window).expect("failed to create surface");
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -188,10 +218,8 @@ impl Renderer {
         // The GUI is drawn through a non-sRGB view of the same frame so that
         // its alpha blending happens on sRGB values, like in Minecraft.
         let gamma_format = format.remove_srgb_suffix();
-        let can_reinterpret = adapter
-            .get_downlevel_capabilities()
-            .flags
-            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+        let can_reinterpret =
+            adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
         let ui_format = if can_reinterpret && gamma_format != format { gamma_format } else { format };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -429,23 +457,10 @@ impl Renderer {
         self.sections.retain(|pos, _| pos.x != column.x || pos.z != column.y);
     }
 
-    pub fn render(
-        &mut self,
-        camera: &Camera,
-        sky: &SkyState,
-        seconds: f32,
-        player: Option<&[EntityVertex]>,
-        hand: Option<&[EntityVertex]>,
-        selection: Option<&Selection>,
-        underwater: Option<&Underwater>,
-        items: &MeshData,
-        particles: &MeshData,
-        held: &MeshData,
-        ui: &[UiVertex],
-        ui_inverted: std::ops::Range<usize>,
-        gui_size: [f32; 2],
-        preview: Option<&Preview>,
-    ) {
+    pub fn render(&mut self, frame: Frame<'_>) {
+        let Frame { camera, sky, seconds, player, hand, selection, underwater, items, particles, held, gui, preview } =
+            frame;
+        let (selection, underwater) = (selection.as_ref(), underwater.as_ref());
         self.block_textures.animate(&self.queue, seconds);
         self.selection.prepare(&self.device, &self.queue, selection, self.size());
         let items = GpuMesh::upload(&self.device, items);
@@ -575,11 +590,10 @@ impl Renderer {
                 held.draw(&mut pass);
             }
         }
-        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.ui.format()),
-            ..Default::default()
-        });
-        self.ui.draw(&self.device, &self.queue, &mut encoder, &ui_view, ui, ui_inverted, gui_size);
+        let ui_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor { format: Some(self.ui.format()), ..Default::default() });
+        self.ui.draw(&self.device, &self.queue, &mut encoder, &ui_view, &gui);
         if let Some(preview) = preview {
             self.draw_preview(&mut encoder, &view, preview);
         }

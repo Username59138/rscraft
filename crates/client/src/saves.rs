@@ -202,10 +202,7 @@ pub fn list_worlds() -> Vec<WorldEntry> {
 /// name, made unique if needed.
 pub fn create_world(name: &str, seed_text: &str, game_mode: GameMode) -> Result<WorldEntry> {
     let name = if name.trim().is_empty() { "New World" } else { name.trim() };
-    let base: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || " -_".contains(c) { c } else { '_' })
-        .collect();
+    let base: String = name.chars().map(|c| if c.is_alphanumeric() || " -_".contains(c) { c } else { '_' }).collect();
     let mut folder = worlds_dir().join(&base);
     let mut n = 2;
     while folder.exists() {
@@ -238,9 +235,8 @@ pub fn parse_seed(text: &str) -> i64 {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         return (nanos as i64).wrapping_mul(0x5851_f42d_4c95_7f2d);
     }
-    text.parse().unwrap_or_else(|_| {
-        text.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)) as i64
-    })
+    text.parse()
+        .unwrap_or_else(|_| text.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)) as i64)
 }
 
 /// Formats a Unix timestamp as `YYYY-MM-DD HH:MM` in local time.

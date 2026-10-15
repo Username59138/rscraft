@@ -379,9 +379,8 @@ impl PlayerController {
 
     fn touches_water(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {
         let (min, max) = (aabb.min.floor().as_ivec3(), (aabb.max - 1e-4).floor().as_ivec3());
-        (min.y..=max.y).any(|y| {
-            (min.z..=max.z).any(|z| (min.x..=max.x).any(|x| world(IVec3::new(x, y, z)) == Some(Block::Water)))
-        })
+        (min.y..=max.y)
+            .any(|y| (min.z..=max.z).any(|z| (min.x..=max.x).any(|x| world(IVec3::new(x, y, z)) == Some(Block::Water))))
     }
 
     fn collides(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {

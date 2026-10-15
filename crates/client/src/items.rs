@@ -57,7 +57,8 @@ impl Items {
     pub fn spawn_at_block(&mut self, pos: IVec3, block: Block, count: u8) {
         let seed = (pos.x * 73 + pos.y * 19 + pos.z * 31 + self.items.len() as i32) as f32;
         // Like vanilla: somewhere around the centre, hopping up and out.
-        let position = pos.as_vec3() + 0.5 + Vec3::new(jitter(seed + 2.0), jitter(seed + 3.0), jitter(seed + 4.0)) * 0.25;
+        let position =
+            pos.as_vec3() + 0.5 + Vec3::new(jitter(seed + 2.0), jitter(seed + 3.0), jitter(seed + 4.0)) * 0.25;
         self.items.push(DroppedItem {
             block,
             count,
@@ -82,7 +83,13 @@ impl Items {
         });
     }
 
-    pub fn update(&mut self, dt: f32, feet: Option<Vec3>, inventory: &mut Inventory, world: &impl Fn(IVec3) -> Option<Block>) {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        feet: Option<Vec3>,
+        inventory: &mut Inventory,
+        world: &impl Fn(IVec3) -> Option<Block>,
+    ) {
         self.accumulator += dt;
         while self.accumulator >= TICK_SECONDS {
             self.accumulator -= TICK_SECONDS;
@@ -134,7 +141,13 @@ impl Items {
     /// Spinning, bobbing cubes, ready to draw with the solid block pipeline.
     /// `light` gives the sky light level (0..1) at a position.
     /// `player` is where picked-up items fly to (the player's feet).
-    pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32, player: Option<Vec3>, light: impl Fn(Vec3) -> f32) -> MeshData {
+    pub fn build_mesh(
+        &self,
+        layers: &BlockLayers,
+        seconds: f32,
+        player: Option<Vec3>,
+        light: impl Fn(Vec3) -> f32,
+    ) -> MeshData {
         let mut mesh = MeshData::default();
         if let Some(feet) = player {
             // Vanilla eases in quadratically towards the middle of the player.

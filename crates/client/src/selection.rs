@@ -138,7 +138,13 @@ impl SelectionRenderer {
     }
 
     /// Uploads this frame's outline and cracks; call before the render pass.
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, selection: Option<&Selection>, screen: (u32, u32)) {
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        selection: Option<&Selection>,
+        screen: (u32, u32),
+    ) {
         self.has_outline = selection.is_some();
         self.crack = None;
         let Some(selection) = selection else { return };
@@ -150,11 +156,13 @@ impl SelectionRenderer {
         // The twelve edges of the block, each as a quad.
         let min = selection.block.as_vec3() - INFLATE;
         let max = min + Vec3::splat(1.0 + 2.0 * INFLATE);
-        let corner = |i: u32| Vec3::new(
-            if i & 1 == 0 { min.x } else { max.x },
-            if i & 2 == 0 { min.y } else { max.y },
-            if i & 4 == 0 { min.z } else { max.z },
-        );
+        let corner = |i: u32| {
+            Vec3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            )
+        };
         const EDGES: [(u32, u32); 12] =
             [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
         let vertices: Vec<OutlineVertex> = EDGES

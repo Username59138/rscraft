@@ -89,7 +89,9 @@ impl Inventory {
                 count -= moved;
             }
         }
-        if count > 0 && let Some(i) = targets.clone().find(|&i| self.slots[i].is_none()) {
+        if count > 0
+            && let Some(i) = targets.clone().find(|&i| self.slots[i].is_none())
+        {
             self.slots[i] = Some(ItemStack { count, ..stack });
             count = 0;
         }

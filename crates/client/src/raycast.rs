@@ -15,7 +15,12 @@ pub struct Hit {
 
 /// Walks the voxel grid along the ray (Amanatides & Woo DDA) and returns the
 /// first targetable block within `max_distance`. Stops at unloaded blocks.
-pub fn raycast(origin: Vec3, direction: Vec3, max_distance: f32, world: impl Fn(IVec3) -> Option<Block>) -> Option<Hit> {
+pub fn raycast(
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+    world: impl Fn(IVec3) -> Option<Block>,
+) -> Option<Hit> {
     let dir = direction.normalize_or_zero();
     if dir == Vec3::ZERO {
         return None;

@@ -45,7 +45,17 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(aspect: f32, position: Vec3, yaw: f32, pitch: f32) -> Self {
-        Self { position, yaw, pitch, fov_y: 70f32.to_radians(), bob_roll: 0.0, bob_pitch: 0.0, aspect, near: 0.05, far: 1000.0 }
+        Self {
+            position,
+            yaw,
+            pitch,
+            fov_y: 70f32.to_radians(),
+            bob_roll: 0.0,
+            bob_pitch: 0.0,
+            aspect,
+            near: 0.05,
+            far: 1000.0,
+        }
     }
 
     pub fn set_aspect(&mut self, aspect: f32) {

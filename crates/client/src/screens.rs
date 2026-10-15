@@ -18,10 +18,18 @@ pub enum Screen {
     None,
     Title,
     SelectWorld(SelectWorld),
-    CreateWorld { name: String, seed: String, mode: GameMode },
-    Options { from_pause: bool },
+    CreateWorld {
+        name: String,
+        seed: String,
+        mode: GameMode,
+    },
+    Options {
+        from_pause: bool,
+    },
     Pause,
-    Loading { progress: f32 },
+    Loading {
+        progress: f32,
+    },
     /// The player's inventory; drawn by the game, not here.
     Inventory,
 }
@@ -49,7 +57,9 @@ pub enum Action {
     /// Options were changed and should be applied right away.
     ApplyOptions,
     /// Options screen closed: save them and go back.
-    CloseOptions { from_pause: bool },
+    CloseOptions {
+        from_pause: bool,
+    },
 }
 
 pub fn draw(screen: &mut Screen, ui: &mut Ui, options: &mut Options) -> Action {
@@ -143,7 +153,11 @@ fn select_world(ui: &mut Ui, state: &mut SelectWorld) -> Action {
         action = Action::Play(state.worlds[selected.unwrap()].clone());
     }
     if ui.button(Rect::new(cx + 4.0, row1, 150.0, 20.0), "Create New World", true) {
-        action = Action::Open(Screen::CreateWorld { name: "New World".into(), seed: String::new(), mode: GameMode::Survival });
+        action = Action::Open(Screen::CreateWorld {
+            name: "New World".into(),
+            seed: String::new(),
+            mode: GameMode::Survival,
+        });
     }
     let delete_label = if state.confirm_delete { "Click again to delete" } else { "Delete" };
     if ui.button(Rect::new(cx - 154.0, row2, 150.0, 20.0), delete_label, selected.is_some()) {

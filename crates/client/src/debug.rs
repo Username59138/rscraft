@@ -51,7 +51,10 @@ pub fn draw(ui: &mut Ui, info: &DebugInfo) {
     let left = [
         format!("rscraft {} (Minecraft {} assets)", env!("CARGO_PKG_VERSION"), crate::MC_VERSION),
         format!("{} fps", info.fps),
-        format!("C: {}/{} sections, {} columns, D: {}", info.drawn_sections, info.total_sections, info.loaded_columns, info.render_distance),
+        format!(
+            "C: {}/{} sections, {} columns, D: {}",
+            info.drawn_sections, info.total_sections, info.loaded_columns, info.render_distance
+        ),
         String::new(),
         format!("XYZ: {:.3} / {:.5} / {:.3}", p.x, p.y, p.z),
         format!("Block: {} {} {}", block.x, block.y, block.z),

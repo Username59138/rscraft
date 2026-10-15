@@ -109,7 +109,14 @@ impl Particles {
 
     /// A terrain bit: a random 4×4-pixel cut of the block's texture, half
     /// the usual particle size.
-    fn spawn_terrain(&mut self, block: Block, layers: &BlockLayers, position: Vec3, direction: Vec3, power: f32) -> &mut Particle {
+    fn spawn_terrain(
+        &mut self,
+        block: Block,
+        layers: &BlockLayers,
+        position: Vec3,
+        direction: Vec3,
+        power: f32,
+    ) -> &mut Particle {
         let uv = [(self.rng.next() * 3.0).floor() / 4.0, (self.rng.next() * 3.0).floor() / 4.0];
         let particle = self.spawn(Kind::Terrain, particle_layer(block, layers), position, direction);
         let v = particle.velocity;
@@ -153,7 +160,11 @@ impl Particles {
         let frame = (self.rng.next() * SPLASH_FRAMES as f32) as u32 % SPLASH_FRAMES;
         let (vy, lifetime) = (self.rng.next() * 0.2 + 0.1, (8.0 / (self.rng.next() * 0.8 + 0.2)) as u32);
         let particle = self.spawn(Kind::Splash, layers.splash + frame, position, Vec3::ZERO);
-        particle.velocity = Vec3::new(particle.velocity.x * 0.3 + velocity.x, vy + velocity.y.max(0.0), particle.velocity.z * 0.3 + velocity.z);
+        particle.velocity = Vec3::new(
+            particle.velocity.x * 0.3 + velocity.x,
+            vy + velocity.y.max(0.0),
+            particle.velocity.z * 0.3 + velocity.z,
+        );
         particle.lifetime = lifetime;
     }
 
@@ -282,7 +293,7 @@ impl Particle {
             self.velocity.x *= 0.7;
             self.velocity.z *= 0.7;
             // Half of the splash droplets die as soon as they land.
-            if self.kind == Kind::Splash && self.age % 2 == 0 {
+            if self.kind == Kind::Splash && self.age.is_multiple_of(2) {
                 self.age = self.lifetime;
             }
         }

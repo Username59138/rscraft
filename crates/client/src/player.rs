@@ -51,12 +51,54 @@ struct Part {
     pivot: [f32; 3],
 }
 
-const HEAD: Part = Part { min: [-4., 24., -4.], size: [8., 8., 8.], uv: [0., 0.], overlay_uv: [32., 0.], overlay_inflate: 0.5, pivot: [0., 24., 0.] };
-const BODY: Part = Part { min: [-4., 12., -2.], size: [8., 12., 4.], uv: [16., 16.], overlay_uv: [16., 32.], overlay_inflate: 0.25, pivot: [0., 24., 0.] };
-const RIGHT_ARM: Part = Part { min: [4., 12., -2.], size: [4., 12., 4.], uv: [40., 16.], overlay_uv: [40., 32.], overlay_inflate: 0.25, pivot: [5., 22., 0.] };
-const LEFT_ARM: Part = Part { min: [-8., 12., -2.], size: [4., 12., 4.], uv: [32., 48.], overlay_uv: [48., 48.], overlay_inflate: 0.25, pivot: [-5., 22., 0.] };
-const RIGHT_LEG: Part = Part { min: [0., 0., -2.], size: [4., 12., 4.], uv: [0., 16.], overlay_uv: [0., 32.], overlay_inflate: 0.25, pivot: [2., 12., 0.] };
-const LEFT_LEG: Part = Part { min: [-4., 0., -2.], size: [4., 12., 4.], uv: [16., 48.], overlay_uv: [0., 48.], overlay_inflate: 0.25, pivot: [-2., 12., 0.] };
+const HEAD: Part = Part {
+    min: [-4., 24., -4.],
+    size: [8., 8., 8.],
+    uv: [0., 0.],
+    overlay_uv: [32., 0.],
+    overlay_inflate: 0.5,
+    pivot: [0., 24., 0.],
+};
+const BODY: Part = Part {
+    min: [-4., 12., -2.],
+    size: [8., 12., 4.],
+    uv: [16., 16.],
+    overlay_uv: [16., 32.],
+    overlay_inflate: 0.25,
+    pivot: [0., 24., 0.],
+};
+const RIGHT_ARM: Part = Part {
+    min: [4., 12., -2.],
+    size: [4., 12., 4.],
+    uv: [40., 16.],
+    overlay_uv: [40., 32.],
+    overlay_inflate: 0.25,
+    pivot: [5., 22., 0.],
+};
+const LEFT_ARM: Part = Part {
+    min: [-8., 12., -2.],
+    size: [4., 12., 4.],
+    uv: [32., 48.],
+    overlay_uv: [48., 48.],
+    overlay_inflate: 0.25,
+    pivot: [-5., 22., 0.],
+};
+const RIGHT_LEG: Part = Part {
+    min: [0., 0., -2.],
+    size: [4., 12., 4.],
+    uv: [0., 16.],
+    overlay_uv: [0., 32.],
+    overlay_inflate: 0.25,
+    pivot: [2., 12., 0.],
+};
+const LEFT_LEG: Part = Part {
+    min: [-4., 0., -2.],
+    size: [4., 12., 4.],
+    uv: [16., 48.],
+    overlay_uv: [0., 48.],
+    overlay_inflate: 0.25,
+    pivot: [-2., 12., 0.],
+};
 
 /// Skin region of a box face, following Minecraft's box UV layout:
 /// `[right][front][left][back]` below `[top][bottom]`.
@@ -100,7 +142,14 @@ fn push_box(out: &mut Vec<EntityVertex>, part: &Part, uv: [f32; 2], inflate: f32
 
 /// The right arm as seen in first person, in model pixels: the shoulder is
 /// at the origin and the hand points along -Y.
-const FIRST_PERSON_ARM: Part = Part { min: [-2., -12., -2.], size: [4., 12., 4.], uv: [40., 16.], overlay_uv: [40., 32.], overlay_inflate: 0.25, pivot: [0., 0., 0.] };
+const FIRST_PERSON_ARM: Part = Part {
+    min: [-2., -12., -2.],
+    size: [4., 12., 4.],
+    uv: [40., 16.],
+    overlay_uv: [40., 32.],
+    overlay_inflate: 0.25,
+    pivot: [0., 0., 0.],
+};
 
 /// What the first-person arm is doing.
 pub struct HandPose {
@@ -150,11 +199,7 @@ pub fn held_block_first_person(pose: &HandPose) -> Mat4 {
     use std::f32::consts::{PI, TAU};
     let s = pose.swing;
     let (sqrt_s, deg) = (s.sqrt(), |d: f32| d.to_radians());
-    let push = Vec3::new(
-        -0.4 * (sqrt_s * PI).sin(),
-        0.2 * (sqrt_s * TAU).sin(),
-        -0.2 * (s * PI).sin(),
-    ) * SWING_AMOUNT;
+    let push = Vec3::new(-0.4 * (sqrt_s * PI).sin(), 0.2 * (sqrt_s * TAU).sin(), -0.2 * (s * PI).sin()) * SWING_AMOUNT;
     let twist = (s * s * PI).sin() * SWING_AMOUNT;
     let tilt = (sqrt_s * PI).sin() * SWING_AMOUNT;
     // Vanilla's offsets assume a 16:9 window; in narrower ones the block
@@ -202,7 +247,11 @@ fn part_transform(pose: &PlayerPose, part: &Part, angle: f32) -> Mat4 {
     let pivot = Vec3::from(part.pivot);
     // Only the head turns sideways on its own.
     let yaw = if part.uv == HEAD.uv { pose.head_yaw } else { 0.0 };
-    world * Mat4::from_translation(pivot) * Mat4::from_rotation_y(-yaw) * Mat4::from_rotation_x(angle) * Mat4::from_translation(-pivot)
+    world
+        * Mat4::from_translation(pivot)
+        * Mat4::from_rotation_y(-yaw)
+        * Mat4::from_rotation_x(angle)
+        * Mat4::from_translation(-pivot)
 }
 
 /// Builds the first-person right arm in world space, placed in front of the
@@ -212,8 +261,9 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
     let swing_down = (s * std::f32::consts::PI).sin() * SWING_AMOUNT;
     let swing_side = (s.sqrt() * std::f32::consts::PI).sin() * SWING_AMOUNT;
     // View space: X right, Y up, -Z forward.
-    let shoulder =
-        Vec3::new(0.36 - swing_side * 0.25, -0.66 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob + equip_offset(pose);
+    let shoulder = Vec3::new(0.36 - swing_side * 0.25, -0.66 + swing_down * 0.1, -0.3 - swing_down * 0.15)
+        + pose.bob
+        + equip_offset(pose);
     // Angled up and in towards the centre of the screen, like vanilla.
     let arm = Mat4::from_translation(shoulder)
         * Mat4::from_rotation_y(0.15 + swing_side * 0.4)
@@ -236,7 +286,8 @@ pub fn build_mesh(pose: &PlayerPose) -> Vec<EntityVertex> {
     let phase = pose.limb_phase;
     // Swimming: the head looks ahead (45° up from the body), the arms crawl
     // in alternating full strokes and the legs flutter, like vanilla.
-    let (stroke_right, stroke_left) = (phase % std::f32::consts::TAU, (phase + std::f32::consts::PI) % std::f32::consts::TAU);
+    let (stroke_right, stroke_left) =
+        (phase % std::f32::consts::TAU, (phase + std::f32::consts::PI) % std::f32::consts::TAU);
     let kick = 0.3 * (phase * 2.0).cos();
     let parts = [
         (&HEAD, lerp(pose.head_pitch, std::f32::consts::FRAC_PI_4)),
@@ -294,7 +345,8 @@ impl PlayerRenderer {
             size,
         );
         let view = texture.create_view(&Default::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("skin sampler"), ..Default::default() });
+        let sampler =
+            device.create_sampler(&wgpu::SamplerDescriptor { label: Some("skin sampler"), ..Default::default() });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("skin layout"),
             entries: &[
@@ -380,7 +432,15 @@ impl PlayerRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { pipeline, bind_group, vertex_buffer, preview_buffer, preview_vertices: 0, body_vertices: 0, hand_vertices: 0 }
+        Self {
+            pipeline,
+            bind_group,
+            vertex_buffer,
+            preview_buffer,
+            preview_vertices: 0,
+            body_vertices: 0,
+            hand_vertices: 0,
+        }
     }
 
     /// Uploads this frame's body and first-person hand; call before the

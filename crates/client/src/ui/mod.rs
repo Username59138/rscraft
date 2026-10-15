@@ -10,8 +10,8 @@ use glam::Vec2;
 use rscraft_world::Block;
 use winit::keyboard::KeyCode;
 
-pub use atlas::{GuiAtlas, Sprite};
 use atlas::{AtlasRect, Border};
+pub use atlas::{GuiAtlas, Sprite};
 
 pub const WHITE: u32 = 0xffffff;
 pub const GRAY: u32 = 0xa0a0a0;
@@ -201,11 +201,7 @@ impl Ui {
             let mut x = 0.0;
             while x < dst.w {
                 let w = src.w.min(dst.w - x);
-                self.quad(
-                    Rect::new(dst.x + x, dst.y + y, w, h),
-                    AtlasRect { x: src.x, y: src.y, w, h },
-                    color,
-                );
+                self.quad(Rect::new(dst.x + x, dst.y + y, w, h), AtlasRect { x: src.x, y: src.y, w, h }, color);
                 x += w;
             }
             y += h;
@@ -233,8 +229,16 @@ impl Ui {
             return;
         };
         let s = info.rect;
-        let cols = [(0.0, left, 0.0, left), (left, s.w - left - right, left, dst.w - left - right), (s.w - right, right, dst.w - right, right)];
-        let rows = [(0.0, top, 0.0, top), (top, s.h - top - bottom, top, dst.h - top - bottom), (s.h - bottom, bottom, dst.h - bottom, bottom)];
+        let cols = [
+            (0.0, left, 0.0, left),
+            (left, s.w - left - right, left, dst.w - left - right),
+            (s.w - right, right, dst.w - right, right),
+        ];
+        let rows = [
+            (0.0, top, 0.0, top),
+            (top, s.h - top - bottom, top, dst.h - top - bottom),
+            (s.h - bottom, bottom, dst.h - bottom, bottom),
+        ];
         for (sy, sh, dy, dh) in rows {
             for (sx, sw, dx, dw) in cols {
                 if dw > 0.0 && dh > 0.0 {
@@ -343,7 +347,7 @@ impl Ui {
             shown = &shown[shown.char_indices().nth(1).map_or(shown.len(), |(i, _)| i)..];
         }
         self.text(rect.x + 4.0, text_y, shown, LIGHT_GRAY);
-        if focused && (self.time * 3.0) as u32 % 2 == 0 {
+        if focused && ((self.time * 3.0) as u32).is_multiple_of(2) {
             let caret_x = rect.x + 4.0 + self.text_width(shown) + if shown.is_empty() { 0.0 } else { 1.0 };
             self.text(caret_x, text_y, "_", LIGHT_GRAY);
         }

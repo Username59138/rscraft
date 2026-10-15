@@ -39,7 +39,8 @@ impl LightRegion {
         for z in 0..REGION {
             for x in 0..REGION {
                 let (lx, lz) = (x - SECTION_SIZE, z - SECTION_SIZE);
-                let column = &columns[((lx.div_euclid(SECTION_SIZE) + 1) + (lz.div_euclid(SECTION_SIZE) + 1) * 3) as usize];
+                let column =
+                    &columns[((lx.div_euclid(SECTION_SIZE) + 1) + (lz.div_euclid(SECTION_SIZE) + 1) * 3) as usize];
                 // Skip all-air sections from the top down.
                 let mut y = MIN_Y + SECTIONS_PER_COLUMN as i32 * SECTION_SIZE - 1;
                 while y >= MIN_Y {

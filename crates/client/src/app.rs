@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use glam::Vec3;
 use glam::IVec3;
+use glam::Vec3;
 use rscraft_world::{Block, Generator, SEA_LEVEL};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -13,24 +13,24 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::camera::{Camera, Perspective};
 use crate::chunks::{ChunkManager, Edits};
+use crate::crafting::Grid;
 use crate::debug::{self, DebugInfo};
+use crate::gamemode::GameMode;
 use crate::hud;
 use crate::input::Input;
 use crate::inventory::{Inventory, ItemStack};
 use crate::inventory_screen::{self, InventoryAction};
 use crate::items::Items;
-use crate::particles::Particles;
 use crate::mesh::MeshData;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
+use crate::particles::Particles;
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
-use crate::crafting::Grid;
-use crate::gamemode::GameMode;
-use crate::renderer::{EntityImages, PREVIEW_DEPTH, Preview, Renderer, Underwater};
-use crate::shadows::Caster;
-use crate::selection::Selection;
+use crate::renderer::{EntityImages, Frame, GuiFrame, PREVIEW_DEPTH, Preview, Renderer, Underwater};
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
+use crate::selection::Selection;
+use crate::shadows::Caster;
 use crate::sky::{DayCycle, SkyImages};
 use crate::switcher;
 use crate::texture::{BlockImages, BlockLayers};
@@ -263,10 +263,8 @@ impl Session {
         // eyes), so standing half under a ledge or canopy already shades
         // them; darkening is quick, brightening slower, so shade lingers.
         let feet = player.position;
-        let target = [0.1, 0.9, EYE_HEIGHT - 0.1]
-            .map(|dy| self.light_at(feet + Vec3::Y * dy))
-            .into_iter()
-            .fold(1.0, f32::min);
+        let target =
+            [0.1, 0.9, EYE_HEIGHT - 0.1].map(|dy| self.light_at(feet + Vec3::Y * dy)).into_iter().fold(1.0, f32::min);
         let rate = if target < self.player_light { 8.0 } else { 2.5 };
         self.player_light += (target - self.player_light) * (dt * rate).min(1.0);
 
@@ -372,7 +370,8 @@ impl Session {
             let pos = hit.block + hit.normal;
             let free = matches!(self.chunks.block_at(pos), Some(Block::Air | Block::Water));
             let blocked = self.player.as_ref().is_some_and(|p| p.intersects_block(pos));
-            if free && !blocked
+            if free
+                && !blocked
                 && let Some(stack) = self.inventory.selected_stack()
             {
                 self.chunks.set_block(pos, stack.block);
@@ -403,10 +402,13 @@ impl Session {
     /// Closing the inventory puts the stack on the cursor and whatever is
     /// in the crafting grid back, dropping what doesn't fit.
     fn return_cursor(&mut self) {
-        let stacks: Vec<ItemStack> = self.cursor.take().into_iter().chain(self.crafting.iter_mut().filter_map(Option::take)).collect();
+        let stacks: Vec<ItemStack> =
+            self.cursor.take().into_iter().chain(self.crafting.iter_mut().filter_map(Option::take)).collect();
         for stack in stacks {
             let left = self.inventory.add(stack.block, stack.count);
-            if left > 0 && let Some(player) = &self.player {
+            if left > 0
+                && let Some(player) = &self.player
+            {
                 self.items.throw(player.eye(), self.camera.forward(), stack.block, left);
             }
         }
@@ -712,7 +714,8 @@ impl State {
     /// pause menu (and the options opened from it) stops it; the inventory
     /// doesn't.
     fn world_running(&self) -> bool {
-        self.in_world() && !matches!(self.screen, Screen::Pause | Screen::Options { from_pause: true } | Screen::Loading { .. })
+        self.in_world()
+            && !matches!(self.screen, Screen::Pause | Screen::Options { from_pause: true } | Screen::Loading { .. })
     }
 
     fn key_pressed(&mut self, code: KeyCode, text: Option<&str>) {
@@ -729,7 +732,11 @@ impl State {
                         Some(selected) => selected.next(),
                         // Vanilla offers the previous mode first.
                         None => session.previous_game_mode.filter(|&m| m != session.game_mode).unwrap_or(
-                            if session.game_mode == GameMode::Creative { GameMode::Survival } else { GameMode::Creative },
+                            if session.game_mode == GameMode::Creative {
+                                GameMode::Survival
+                            } else {
+                                GameMode::Creative
+                            },
                         ),
                     });
                 }
@@ -739,8 +746,15 @@ impl State {
                     let whole = self.input.is_pressed(KeyCode::ControlLeft);
                     self.session.throw_selected(whole);
                 }
-                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5
-                | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                KeyCode::Digit1
+                | KeyCode::Digit2
+                | KeyCode::Digit3
+                | KeyCode::Digit4
+                | KeyCode::Digit5
+                | KeyCode::Digit6
+                | KeyCode::Digit7
+                | KeyCode::Digit8
+                | KeyCode::Digit9 => {
                     self.session.inventory.selected = code as usize - KeyCode::Digit1 as usize;
                 }
                 _ => {}
@@ -800,7 +814,8 @@ impl State {
         // but only takes the player's input when no screen is open.
         let mut controls = None;
         if self.world_running() {
-            let time_speed = if self.playing() && self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
+            let time_speed =
+                if self.playing() && self.input.is_pressed(KeyCode::KeyT) { TIME_FAST_FORWARD } else { 1.0 };
             self.session.day.advance(dt, time_speed);
             controls = Some(Controls { look_y: self.session.camera.forward().y, ..Controls::default() });
         }
@@ -826,7 +841,8 @@ impl State {
         if self.world_running() {
             let session = &mut self.session;
             // Spectators don't pick items up.
-            let feet = session.player.as_ref().filter(|_| !session.game_mode.is_spectator()).map(PlayerController::feet);
+            let feet =
+                session.player.as_ref().filter(|_| !session.game_mode.is_spectator()).map(PlayerController::feet);
             let chunks = &session.chunks;
             session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
             if let Some((at, surface, velocity)) = session.player.as_mut().and_then(|p| p.splash.take()) {
@@ -942,27 +958,27 @@ impl State {
         });
         let camera = self.session.camera.for_perspective(perspective);
         let underwater = self.session.underwater(&camera, dt);
-        self.renderer.render(
-            &camera,
-            &self.session.day.state(),
+        self.renderer.render(Frame {
+            camera: &camera,
+            sky: &self.session.day.state(),
             seconds,
-            player_mesh.as_deref(),
-            hand_mesh.as_deref(),
-            target
-                .map(|(hit, progress)| Selection {
-                    block: hit.block,
-                    crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
-                })
-                .as_ref(),
-            underwater.as_ref(),
-            &world_items,
-            &particle_mesh,
-            &held_mesh,
-            &self.ui.vertices,
-            self.ui.inverted.clone(),
-            [self.ui.width, self.ui.height],
-            preview.as_ref(),
-        );
+            player: player_mesh.as_deref(),
+            hand: hand_mesh.as_deref(),
+            selection: target.map(|(hit, progress)| Selection {
+                block: hit.block,
+                crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
+            }),
+            underwater,
+            items: &world_items,
+            particles: &particle_mesh,
+            held: &held_mesh,
+            gui: GuiFrame {
+                vertices: &self.ui.vertices,
+                inverted: self.ui.inverted.clone(),
+                size: [self.ui.width, self.ui.height],
+            },
+            preview: preview.as_ref(),
+        });
         self.ui.input.end_frame();
 
         self.frames += 1;

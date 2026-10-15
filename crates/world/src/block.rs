@@ -196,7 +196,11 @@ impl Block {
             Block::Grass => match face {
                 Face::Up => FaceTexture::tinted("grass_block_top", Tint::Grass),
                 Face::Down => FaceTexture::plain("dirt"),
-                _ => FaceTexture { name: "grass_block_side", tint: Tint::Grass, overlay: Some("grass_block_side_overlay") },
+                _ => FaceTexture {
+                    name: "grass_block_side",
+                    tint: Tint::Grass,
+                    overlay: Some("grass_block_side_overlay"),
+                },
             },
             Block::Sand => FaceTexture::plain("sand"),
             Block::Gravel => FaceTexture::plain("gravel"),

@@ -167,7 +167,7 @@ impl GuiAtlas {
                 images.push((Entry::Icon(*block, i), face.clone()));
             }
         }
-        let (font_image, font_chars) = match jar.as_deref_mut().map(load_font) {
+        let (font_image, font_chars) = match jar.map(load_font) {
             Some(Ok(font)) => font,
             Some(Err(err)) => {
                 log::warn!("font: {err:#}");
@@ -247,7 +247,7 @@ impl GuiAtlas {
 
 fn solid(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage {
     let mut image = RgbaImage::new(width, height);
-    image.pixels.chunks_exact_mut(4).for_each(|p| p.copy_from_slice(&rgba));
+    image.pixels.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p.copy_from_slice(&rgba));
     image
 }
 
@@ -272,8 +272,13 @@ fn load_sprite(jar: &mut ClientJar, path: &str) -> anyhow::Result<(RgbaImage, Op
 
 /// Loads `font/ascii.png` and returns it with (char, cell x, cell y, pixel width)
 /// for every glyph listed in the font definition.
-fn load_font(jar: &mut ClientJar) -> anyhow::Result<(RgbaImage, Vec<(char, u32, u32, u32)>)> {
-    let definition: serde_json::Value = serde_json::from_slice(&jar.read("assets/minecraft/font/include/default.json")?)?;
+/// A glyph of the font image: the character, its cell column and row, and
+/// its width in pixels.
+type FontChar = (char, u32, u32, u32);
+
+fn load_font(jar: &mut ClientJar) -> anyhow::Result<(RgbaImage, Vec<FontChar>)> {
+    let definition: serde_json::Value =
+        serde_json::from_slice(&jar.read("assets/minecraft/font/include/default.json")?)?;
     let provider = definition["providers"]
         .as_array()
         .and_then(|providers| providers.iter().find(|p| p["file"] == "minecraft:font/ascii.png"))

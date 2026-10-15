@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use super::{GuiAtlas, UiVertex};
+use crate::renderer::GuiFrame;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -41,7 +42,8 @@ impl UiRenderer {
             size,
         );
         let view = texture.create_view(&Default::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("gui sampler"), ..Default::default() });
+        let sampler =
+            device.create_sampler(&wgpu::SamplerDescriptor { label: Some("gui sampler"), ..Default::default() });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gui screen"),
             size: size_of::<ScreenUniform>() as u64,
@@ -96,35 +98,37 @@ impl UiRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let pipeline = |label, blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<UiVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = |label, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<UiVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+                    })],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
 
         // The crosshair inverts what's behind it, like vanilla's
         // ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR blending.
@@ -170,10 +174,9 @@ impl UiRenderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
-        vertices: &[UiVertex],
-        inverted: std::ops::Range<usize>,
-        gui_size: [f32; 2],
+        gui: &GuiFrame<'_>,
     ) {
+        let (vertices, inverted, gui_size) = (gui.vertices, gui.inverted.clone(), gui.size);
         if vertices.is_empty() {
             return;
         }
@@ -200,7 +203,9 @@ impl UiRenderer {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         // Everything in order, switching blending for the inverted range.
         let (start, end, len) = (inverted.start as u32, inverted.end as u32, vertices.len() as u32);
-        for (pipeline, range) in [(&self.pipeline, 0..start), (&self.invert_pipeline, start..end), (&self.pipeline, end..len)] {
+        for (pipeline, range) in
+            [(&self.pipeline, 0..start), (&self.invert_pipeline, start..end), (&self.pipeline, end..len)]
+        {
             if !range.is_empty() {
                 pass.set_pipeline(pipeline);
                 pass.draw(range, 0..1);

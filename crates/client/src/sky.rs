@@ -78,13 +78,12 @@ pub struct SkyImages {
 impl SkyImages {
     pub fn load(mut jar: Option<&mut ClientJar>) -> Self {
         let mut texture = |name: &str| {
-            jar.as_deref_mut().and_then(|jar| {
-                jar.texture(name).map_err(|err| log::warn!("sky texture {name}: {err:#}")).ok()
-            })
+            jar.as_deref_mut()
+                .and_then(|jar| jar.texture(name).map_err(|err| log::warn!("sky texture {name}: {err:#}")).ok())
         };
         let sun = texture("environment/celestial/sun").unwrap_or_else(|| placeholder_disc([255, 240, 160, 255]));
-        let moon = texture("environment/celestial/moon/full_moon")
-            .unwrap_or_else(|| placeholder_disc([200, 200, 210, 255]));
+        let moon =
+            texture("environment/celestial/moon/full_moon").unwrap_or_else(|| placeholder_disc([200, 200, 210, 255]));
         let clouds = texture("environment/clouds").unwrap_or_else(|| RgbaImage::new(1, 1));
         let underwater = texture("misc/underwater").unwrap_or_else(|| RgbaImage::new(1, 1));
         Self {
@@ -126,10 +125,8 @@ impl SkyRenderer {
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let celestial = upload(device, queue, "celestial", &[&images.sun, &images.moon, &images.underwater]);
-        let celestial_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("celestial sampler"),
-            ..Default::default()
-        });
+        let celestial_sampler =
+            device.create_sampler(&wgpu::SamplerDescriptor { label: Some("celestial sampler"), ..Default::default() });
 
         let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -166,41 +163,47 @@ impl SkyRenderer {
             bind_group_layouts: &[Some(globals_layout), Some(&layout)],
             ..Default::default()
         });
-        let pipeline = |label, fragment, blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_sky"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(fragment),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: depth_format,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = |label, fragment, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_sky"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: depth_format,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
 
         Self {
             pipeline: pipeline("sky pipeline", "fs_sky", wgpu::BlendState::REPLACE),
-            underwater_pipeline: pipeline("underwater overlay pipeline", "fs_underwater", wgpu::BlendState::ALPHA_BLENDING),
+            underwater_pipeline: pipeline(
+                "underwater overlay pipeline",
+                "fs_underwater",
+                wgpu::BlendState::ALPHA_BLENDING,
+            ),
             bind_group,
         }
     }

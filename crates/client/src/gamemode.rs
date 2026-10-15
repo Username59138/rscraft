@@ -14,7 +14,8 @@ pub enum GameMode {
 
 impl GameMode {
     /// The order of the F3+F4 switcher.
-    pub const SWITCHER: [GameMode; 4] = [GameMode::Creative, GameMode::Survival, GameMode::Adventure, GameMode::Spectator];
+    pub const SWITCHER: [GameMode; 4] =
+        [GameMode::Creative, GameMode::Survival, GameMode::Adventure, GameMode::Spectator];
 
     pub fn name(self) -> &'static str {
         match self {

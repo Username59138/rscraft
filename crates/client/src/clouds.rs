@@ -31,7 +31,7 @@ struct CloudMap {
 
 impl CloudMap {
     fn new(image: &RgbaImage) -> Self {
-        let cells = image.pixels.chunks_exact(4).map(|p| p[3] >= 128).collect();
+        let cells = image.pixels.as_chunks::<4>().0.iter().map(|p| p[3] >= 128).collect();
         Self { width: image.width as i32, height: image.height as i32, cells }
     }
 
@@ -144,11 +144,14 @@ impl CloudRenderer {
 
         self.vertex_count = vertices.len() as u32;
         self.vertex_buffer = (!vertices.is_empty()).then(|| {
-            wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
-                label: Some("cloud vertices"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
+            wgpu::util::DeviceExt::create_buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("cloud vertices"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            )
         });
     }
 
@@ -157,7 +160,14 @@ impl CloudRenderer {
         let max = min + Vec3::new(CELL_SIZE, CLOUD_THICKNESS, CELL_SIZE);
         let mut quad = |corners: [Vec3; 4], shade: f32| {
             let v = |p: Vec3| CloudVertex { position: p.to_array(), shade };
-            out.extend_from_slice(&[v(corners[0]), v(corners[1]), v(corners[2]), v(corners[0]), v(corners[2]), v(corners[3])]);
+            out.extend_from_slice(&[
+                v(corners[0]),
+                v(corners[1]),
+                v(corners[2]),
+                v(corners[0]),
+                v(corners[2]),
+                v(corners[3]),
+            ]);
         };
         let (x0, y0, z0, x1, y1, z1) = (min.x, min.y, min.z, max.x, max.y, max.z);
         let p = Vec3::new;

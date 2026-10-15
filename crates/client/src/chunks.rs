@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
-use rscraft_world::{Block, ColumnGroup, ColumnLight, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section};
+use rscraft_world::{
+    Block, ColumnGroup, ColumnLight, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section,
+};
 
 use crate::mesh::{Neighborhood, SectionMesh};
 use crate::renderer::Renderer;
@@ -229,9 +231,9 @@ impl ChunkManager {
             .filter(|&(_, &state)| state == ColumnState::Generated)
             .map(|(&c, _)| c)
             .filter(|c| {
-                (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| IVec2::new(dx, dz))).all(|d| {
-                    matches!(self.columns.get(&(c + d)), Some(ColumnState::Generated | ColumnState::Meshed))
-                })
+                (-1..=1)
+                    .flat_map(|dz| (-1..=1).map(move |dx| IVec2::new(dx, dz)))
+                    .all(|d| matches!(self.columns.get(&(c + d)), Some(ColumnState::Generated | ColumnState::Meshed)))
             })
             .collect();
 

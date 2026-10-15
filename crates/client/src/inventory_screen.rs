@@ -53,7 +53,13 @@ fn slot(ui: &mut Ui, x: f32, y: f32, stack: Option<ItemStack>) -> bool {
     hovered
 }
 
-pub fn draw(ui: &mut Ui, inventory: &mut Inventory, grid: &mut Grid, cursor: &mut Option<ItemStack>, shift: bool) -> InventoryAction {
+pub fn draw(
+    ui: &mut Ui,
+    inventory: &mut Inventory,
+    grid: &mut Grid,
+    cursor: &mut Option<ItemStack>,
+    shift: bool,
+) -> InventoryAction {
     // Vanilla's in-game screen background, about 75% black.
     ui.fill(Rect::new(0.0, 0.0, ui.width, ui.height), 0x101010, 0.75);
     let (left, top) = origin(ui);

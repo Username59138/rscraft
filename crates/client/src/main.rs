@@ -7,10 +7,10 @@ mod debug;
 mod frustum;
 mod gamemode;
 mod hud;
+mod input;
 mod inventory;
 mod inventory_screen;
 mod items;
-mod input;
 mod mesh;
 mod movement;
 mod particles;
@@ -18,9 +18,9 @@ mod player;
 mod raycast;
 mod renderer;
 mod saves;
+mod screens;
 mod selection;
 mod shadows;
-mod screens;
 mod sky;
 mod switcher;
 mod texture;
@@ -36,15 +36,14 @@ fn main() {
         .init();
 
     // Before the window opens: the first run downloads the client jar.
-    let mut jar = match rscraft_assets::ensure_client_jar(MC_VERSION)
-        .and_then(|path| rscraft_assets::ClientJar::open(&path))
-    {
-        Ok(jar) => Some(jar),
-        Err(err) => {
-            log::error!("Minecraft assets unavailable, using placeholder textures: {err:#}");
-            None
-        }
-    };
+    let mut jar =
+        match rscraft_assets::ensure_client_jar(MC_VERSION).and_then(|path| rscraft_assets::ClientJar::open(&path)) {
+            Ok(jar) => Some(jar),
+            Err(err) => {
+                log::error!("Minecraft assets unavailable, using placeholder textures: {err:#}");
+                None
+            }
+        };
     let block_images = texture::BlockImages::load(jar.as_mut());
     let sky_images = sky::SkyImages::load(jar.as_mut());
     let icons: Vec<_> = rscraft_world::Block::ALL
@@ -58,7 +57,7 @@ fn main() {
         .and_then(|jar| jar.texture("entity/player/wide/steve").map_err(|err| log::warn!("skin: {err:#}")).ok())
         .unwrap_or_else(|| {
             let mut skin = rscraft_assets::RgbaImage::new(64, 64);
-            skin.pixels.chunks_exact_mut(4).for_each(|p| p.copy_from_slice(&[200, 120, 90, 255]));
+            skin.pixels.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p.copy_from_slice(&[200, 120, 90, 255]));
             skin
         });
     let shadow = jar
