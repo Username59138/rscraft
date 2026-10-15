@@ -26,7 +26,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let daylight = globals.sun_dir.w;
     var color = mix(vec3<f32>(0.08, 0.08, 0.11), vec3<f32>(1.0), daylight);
-    color = color * in.shade + globals.sunset.rgb * globals.sunset.w * 0.4;
+    color = color * gamma_light(in.shade) + globals.sunset.rgb * globals.sunset.w * 0.4;
     // Clouds fade out towards the edge of the cloud range.
     let dist = distance(in.world_pos.xz, globals.camera_pos.xz);
     let fade = 1.0 - smoothstep(globals.params.w * 0.4, globals.params.w, dist);

@@ -37,7 +37,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let shade = 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z);
     // Sky light is scaled by the time of day; a little ambient keeps caves from pitch black.
     let sky = light_brightness(in.sky) * globals.zenith.w;
-    out.light = shade * in.ao * max(sky, 0.03);
+    out.light = gamma_light(shade * in.ao * max(sky, 0.05));
     return out;
 }
 

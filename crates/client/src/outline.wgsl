@@ -37,7 +37,6 @@ fn vs_main(in: VertexIn) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs_main() -> @location(0) vec4<f32> {
-    // Vanilla's block outline is black at 40% opacity in sRGB; blending here
-    // happens in linear space, where that darkening takes about 68%.
-    return vec4<f32>(0.0, 0.0, 0.0, 0.68);
+    // Vanilla's block outline: black at 40% opacity.
+    return vec4<f32>(0.0, 0.0, 0.0, srgb_alpha(0.4));
 }

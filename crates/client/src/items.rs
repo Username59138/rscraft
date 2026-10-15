@@ -7,6 +7,7 @@ use rscraft_world::{Block, Face};
 use crate::inventory::Inventory;
 use crate::mesh::MeshData;
 use crate::movement::TICK_SECONDS;
+use crate::shadows::Caster;
 use crate::texture::BlockLayers;
 
 /// Half the size of the dropped block cube (vanilla draws them at 1/4 scale).
@@ -22,6 +23,8 @@ struct DroppedItem {
     block: Block,
     count: u8,
     position: Vec3,
+    /// Position at the previous tick, for smooth rendering between ticks.
+    previous: Vec3,
     velocity: Vec3,
     on_ground: bool,
     age: f32,
@@ -46,6 +49,7 @@ impl Items {
             block,
             count,
             position: pos.as_vec3() + 0.5,
+            previous: pos.as_vec3() + 0.5,
             velocity: Vec3::new(jitter(seed) * 0.1, 0.2, jitter(seed + 1.0) * 0.1),
             on_ground: false,
             age: 0.0,
@@ -58,6 +62,7 @@ impl Items {
             block,
             count,
             position: eye - Vec3::Y * 0.3,
+            previous: eye - Vec3::Y * 0.3,
             velocity: direction * 0.3 + Vec3::Y * 0.1,
             on_ground: false,
             age: -1.0, // A longer pickup delay, so it isn't picked straight back up.
@@ -87,17 +92,32 @@ impl Items {
         self.items.retain(|item| item.count > 0 && item.age < LIFETIME);
     }
 
+    fn alpha(&self) -> f32 {
+        self.accumulator / TICK_SECONDS
+    }
+
+    /// Where every item is drawn this frame, between its last two ticks.
+    fn render_positions(&self) -> impl Iterator<Item = Vec3> + '_ {
+        let alpha = self.alpha();
+        self.items.iter().map(move |item| item.previous.lerp(item.position, alpha))
+    }
+
+    /// Shadow casters for every item, like vanilla's (radius 0.15, strength 0.75).
+    pub fn shadow_casters(&self) -> impl Iterator<Item = Caster> + '_ {
+        self.render_positions().map(|p| Caster { feet: p - Vec3::Y * HALF_SIZE, radius: 0.15, strength: 0.75 })
+    }
+
     /// Spinning, bobbing cubes, ready to draw with the solid block pipeline.
     pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32) -> MeshData {
         let mut mesh = MeshData::default();
-        for (i, item) in self.items.iter().enumerate() {
+        for (i, (item, position)) in self.items.iter().zip(self.render_positions()).enumerate() {
             let start = mesh.vertices.len();
             for face in Face::ALL {
                 mesh.push_face(IVec3::ZERO, face, layers.get(item.block, face), [3; 4], [1.0; 4], 1.0);
             }
             let phase = seconds + i as f32 * 1.7;
             let bob = (phase * 2.0).sin() * 0.05 + 0.1;
-            let transform = Mat4::from_translation(item.position + Vec3::Y * bob)
+            let transform = Mat4::from_translation(position + Vec3::Y * bob)
                 * Mat4::from_rotation_y(phase)
                 * Mat4::from_scale(Vec3::splat(HALF_SIZE * 2.0))
                 * Mat4::from_translation(Vec3::splat(-0.5));
@@ -112,6 +132,7 @@ impl Items {
 
 impl DroppedItem {
     fn tick(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
+        self.previous = self.position;
         self.velocity.y -= GRAVITY;
         // Slide along each axis until something solid is in the way.
         let solid = |p: Vec3| world(p.floor().as_ivec3()).is_none_or(Block::is_solid);

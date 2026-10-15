@@ -23,7 +23,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // Entities get soft directional shading instead of fixed per-face values.
     let n = normalize(in.normal);
     let shade = 0.6 + 0.4 * max(n.y, 0.0) + 0.2 * abs(n.z) - 0.1 * max(-n.y, 0.0);
-    out.light = clamp(shade, 0.4, 1.0) * globals.zenith.w;
+    out.light = gamma_light(clamp(shade, 0.4, 1.0) * globals.zenith.w);
     return out;
 }
 

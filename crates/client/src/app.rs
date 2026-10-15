@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use glam::Vec3;
-use rscraft_assets::RgbaImage;
 use glam::IVec3;
 use rscraft_world::{Block, Generator, SEA_LEVEL};
 use winit::application::ApplicationHandler;
@@ -23,7 +22,8 @@ use crate::items::Items;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
-use crate::renderer::Renderer;
+use crate::renderer::{EntityImages, Renderer};
+use crate::shadows::Caster;
 use crate::selection::Selection;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
@@ -227,15 +227,17 @@ impl Session {
         };
 
         let target = chunks.block_at(hit.block).unwrap_or(Block::Air);
+        // Like vanilla, the arm keeps swinging while attacking a block, even
+        // in the pause between one block breaking and the next.
+        if attack && self.swing == 0.0 {
+            self.start_swing();
+        }
         match (attack, target.break_seconds()) {
             (true, Some(seconds)) if self.break_cooldown == 0.0 => {
                 let progress = match self.breaking {
                     Some((pos, progress)) if pos == hit.block => progress,
                     _ => 0.0,
                 } + dt / seconds.max(0.05);
-                if self.swing == 0.0 {
-                    self.start_swing();
-                }
                 if progress >= 1.0 {
                     self.chunks.set_block(hit.block, Block::Air);
                     if let Some(item) = target.drop() {
@@ -352,13 +354,13 @@ pub struct App {
     images: BlockImages,
     sky_images: SkyImages,
     atlas: Option<GuiAtlas>,
-    skin: RgbaImage,
+    entity_images: EntityImages,
     state: Option<State>,
 }
 
 impl App {
-    pub fn new(images: BlockImages, sky_images: SkyImages, atlas: GuiAtlas, skin: RgbaImage) -> Self {
-        Self { images, sky_images, atlas: Some(atlas), skin, state: None }
+    pub fn new(images: BlockImages, sky_images: SkyImages, atlas: GuiAtlas, entity_images: EntityImages) -> Self {
+        Self { images, sky_images, atlas: Some(atlas), entity_images, state: None }
     }
 }
 
@@ -378,7 +380,7 @@ impl ApplicationHandler for App {
             &self.images,
             &self.sky_images,
             &atlas,
-            &self.skin,
+            &self.entity_images,
             options.render_distance,
         ));
         let layers = Arc::new(self.images.layers.clone());
@@ -658,6 +660,15 @@ impl State {
         let hand_mesh = (perspective == Perspective::FirstPerson)
             .then(|| self.session.hand().map(|hand| player::build_hand_mesh(&hand)))
             .flatten();
+        // Shadows: dropped items always, the player only when visible (F5).
+        let mut casters: Vec<Caster> = self.session.items.shadow_casters().collect();
+        if let Some(player) = &self.session.player
+            && perspective != Perspective::FirstPerson
+        {
+            casters.push(Caster { feet: player.feet(), radius: 0.5, strength: 1.0 });
+        }
+        let chunks = &self.session.chunks;
+        self.renderer.prepare_shadows(&casters, &|pos| chunks.block_at(pos));
         let camera = self.session.camera.for_perspective(perspective);
         self.renderer.render(
             &camera,

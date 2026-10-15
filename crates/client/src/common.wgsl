@@ -29,6 +29,19 @@ fn sky_color(dir: vec3<f32>) -> vec3<f32> {
     return color;
 }
 
+// Minecraft does its lighting maths on sRGB colours, but we blend in
+// linear space. These convert so brightness and overlays look the same.
+
+/// A brightness multiplier meant for sRGB colours, for use on linear ones.
+fn gamma_light(light: f32) -> f32 {
+    return pow(max(light, 0.0), 2.2);
+}
+
+/// Alpha for a dark overlay that darkens as much as `alpha` would in sRGB.
+fn srgb_alpha(alpha: f32) -> f32 {
+    return 1.0 - pow(1.0 - clamp(alpha, 0.0, 1.0), 2.2);
+}
+
 /// Cylindrical fog like Minecraft: horizontal distance only.
 fn fog_factor(world_pos: vec3<f32>) -> f32 {
     let dist = distance(world_pos.xz, globals.camera_pos.xz);

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, IVec3, Vec3};
-use rscraft_world::SECTION_SIZE;
+use rscraft_world::{Block, SECTION_SIZE};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
@@ -16,6 +16,7 @@ use crate::frustum::Frustum;
 use crate::mesh::{MeshData, SectionMesh, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
 use crate::selection::{Selection, SelectionRenderer};
+use crate::shadows::{Caster, ShadowRenderer};
 use crate::sky::{self, SkyImages, SkyRenderer, SkyState};
 use crate::texture::{BlockImages, BlockTextures};
 use crate::ui::render::UiRenderer;
@@ -35,6 +36,12 @@ struct Globals {
     horizon: [f32; 4],
     sunset: [f32; 4],
     params: [f32; 4],
+}
+
+/// Textures used to draw entities.
+pub struct EntityImages {
+    pub skin: RgbaImage,
+    pub shadow: RgbaImage,
 }
 
 /// Compiles a WGSL shader with common.wgsl prepended.
@@ -98,6 +105,7 @@ pub struct Renderer {
     sky: SkyRenderer,
     clouds: CloudRenderer,
     player: PlayerRenderer,
+    shadows: ShadowRenderer,
     selection: SelectionRenderer,
     ui: UiRenderer,
     sections: HashMap<IVec3, GpuSection>,
@@ -115,7 +123,7 @@ impl Renderer {
         images: &BlockImages,
         sky_images: &SkyImages,
         atlas: &GuiAtlas,
-        skin: &RgbaImage,
+        entity_images: &EntityImages,
         render_distance: i32,
     ) -> Self {
         let size = window.inner_size();
@@ -279,7 +287,10 @@ impl Renderer {
         let crack_pipeline = pipeline("crack pipeline", "fs_crack", multiply, true);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
         let clouds = CloudRenderer::new(&device, &sky_images.clouds, &globals_layout, config.format, DEPTH_FORMAT);
-        let player = PlayerRenderer::new(&device, &queue, skin, &globals_layout, config.format, DEPTH_FORMAT);
+        let player =
+            PlayerRenderer::new(&device, &queue, &entity_images.skin, &globals_layout, config.format, DEPTH_FORMAT);
+        let shadows =
+            ShadowRenderer::new(&device, &queue, &entity_images.shadow, &globals_layout, config.format, DEPTH_FORMAT);
         let ui = UiRenderer::new(&device, &queue, atlas, config.format);
         let selection = SelectionRenderer::new(&device, &globals_layout, config.format, DEPTH_FORMAT);
 
@@ -299,6 +310,7 @@ impl Renderer {
             sky,
             clouds,
             player,
+            shadows,
             selection,
             ui,
             sections: HashMap::new(),
@@ -334,6 +346,11 @@ impl Renderer {
     /// Drops every section, e.g. when switching worlds.
     pub fn clear_sections(&mut self) {
         self.sections.clear();
+    }
+
+    /// Builds this frame's entity shadows; call before `render`.
+    pub fn prepare_shadows(&mut self, casters: &[Caster], world: &impl Fn(IVec3) -> Option<Block>) {
+        self.shadows.prepare(&self.device, casters, world);
     }
 
     pub fn total_sections(&self) -> usize {
@@ -446,6 +463,7 @@ impl Renderer {
                 items.draw(&mut pass);
             }
             self.player.draw_body(&mut pass);
+            self.shadows.draw(&mut pass);
             self.clouds.draw(&mut pass);
 
             // Translucent geometry goes last, over the finished opaque scene.

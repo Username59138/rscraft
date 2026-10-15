@@ -16,6 +16,7 @@ mod raycast;
 mod renderer;
 mod saves;
 mod selection;
+mod shadows;
 mod screens;
 mod sky;
 mod texture;
@@ -56,11 +57,25 @@ fn main() {
             skin.pixels.chunks_exact_mut(4).for_each(|p| p.copy_from_slice(&[200, 120, 90, 255]));
             skin
         });
+    let shadow = jar
+        .as_mut()
+        .and_then(|jar| jar.texture("misc/shadow").map_err(|err| log::warn!("shadow: {err:#}")).ok())
+        .unwrap_or_else(|| {
+            // A soft dark disc, in case the jar is missing.
+            let mut image = rscraft_assets::RgbaImage::new(16, 16);
+            for y in 0..16 {
+                for x in 0..16 {
+                    let d = ((x as f32 - 7.5).powi(2) + (y as f32 - 7.5).powi(2)).sqrt();
+                    image.set_pixel(x, y, [0, 0, 0, if d < 7.5 { 160 } else { 0 }]);
+                }
+            }
+            image
+        });
     drop(jar);
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = app::App::new(block_images, sky_images, atlas, skin);
+    let mut app = app::App::new(block_images, sky_images, atlas, renderer::EntityImages { skin, shadow });
     event_loop.run_app(&mut app).expect("event loop error");
 }
