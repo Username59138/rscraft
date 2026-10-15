@@ -1,0 +1,10 @@
+{
+  "position": [-7.5, 90.0, 24.5],
+  "yaw": 30,
+  "pitch": -15,
+  "flying": true,
+  "game_mode": "creative",
+  "wait": 8,
+  "benchmark": true,
+  "screenshot": "out/benchmark.png"
+}

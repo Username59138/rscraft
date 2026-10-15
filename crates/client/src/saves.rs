@@ -262,11 +262,19 @@ pub struct Options {
     pub sensitivity: f32,
     /// 0 = auto.
     pub gui_scale: u32,
+    /// Frames per second cap; MAX_FPS_UNLIMITED (260) means no cap.
+    pub max_fps: u32,
+    /// Wait for the display's refresh, which also caps the frame rate.
+    pub vsync: bool,
 }
+
+/// Like vanilla's Max Framerate slider: 10 to 250 in steps of 10, and the
+/// last step means unlimited.
+pub const MAX_FPS_UNLIMITED: u32 = 260;
 
 impl Default for Options {
     fn default() -> Self {
-        Self { fov: 70.0, render_distance: 12, sensitivity: 1.0, gui_scale: 0 }
+        Self { fov: 70.0, render_distance: 12, sensitivity: 1.0, gui_scale: 0, max_fps: 120, vsync: true }
     }
 }
 
@@ -277,6 +285,11 @@ impl Options {
 
     pub fn load() -> Self {
         fs::read(Self::path()).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+    }
+
+    /// The frame cap, if any.
+    pub fn fps_limit(&self) -> Option<u32> {
+        (self.max_fps < MAX_FPS_UNLIMITED).then_some(self.max_fps.max(10))
     }
 
     pub fn save(&self) {

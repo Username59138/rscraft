@@ -20,6 +20,7 @@ use crate::frustum::Frustum;
 use crate::gpu::{self, Depth, PipelineDesc};
 use crate::mesh::{MeshData, SectionMesh, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
+use crate::saves::Options;
 use crate::selection::{Selection, SelectionRenderer};
 use crate::shadows::{Caster, ShadowRenderer};
 use crate::sky::{self, SkyImages, SkyRenderer, SkyState};
@@ -177,8 +178,9 @@ impl Renderer {
         sky_images: &SkyImages,
         atlas: &GuiAtlas,
         entity_images: &EntityImages,
-        render_distance: i32,
+        options: &Options,
     ) -> Self {
+        let (render_distance, vsync) = (options.render_distance, options.vsync);
         let size = window.inner_size();
 
         let instance =
@@ -220,7 +222,7 @@ impl Renderer {
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: present_mode(vsync),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: if ui_format != format { vec![ui_format] } else { vec![] },
@@ -359,6 +361,12 @@ impl Renderer {
     /// Clouds reach twice as far as the terrain.
     fn cloud_extent(&self) -> f32 {
         self.fog_end * 2.0
+    }
+
+    /// Switches VSync on or off.
+    pub fn set_vsync(&mut self, vsync: bool) {
+        self.config.present_mode = present_mode(vsync);
+        self.surface.configure(&self.device, &self.config);
     }
 
     pub fn set_render_distance(&mut self, render_distance: i32) {
@@ -549,6 +557,12 @@ impl Renderer {
     pub fn request_screenshot(&mut self, path: std::path::PathBuf) {
         self.screenshot = Some(path);
     }
+}
+
+/// Without VSync, frames are shown as soon as they're ready (mailbox where
+/// available, so there's no tearing).
+fn present_mode(vsync: bool) -> wgpu::PresentMode {
+    if vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync }
 }
 
 /// Fog ends a chunk before the edge of loaded terrain.

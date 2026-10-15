@@ -3,7 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::saves::{self, Options, WorldEntry};
+use crate::saves::{self, MAX_FPS_UNLIMITED, Options, WorldEntry};
 use crate::ui::{GRAY, Rect, Sprite, Ui, WHITE};
 use rscraft_world::gamemode::GameMode;
 
@@ -254,6 +254,22 @@ fn options_screen(ui: &mut Ui, options: &mut Options, from_pause: bool) -> Actio
     };
     if ui.button(row(3.0), &scale_label, true) {
         options.gui_scale = (options.gui_scale + 1) % 5;
+        changed = true;
+    }
+
+    // Vanilla's Max Framerate: 10 to 250 fps in steps of 10, then Unlimited.
+    let mut fps = (options.max_fps.clamp(10, MAX_FPS_UNLIMITED) - 10) as f32 / 250.0;
+    let fps_label = match options.fps_limit() {
+        Some(limit) => format!("Max Framerate: {limit} fps"),
+        None => "Max Framerate: Unlimited".to_string(),
+    };
+    if ui.slider(13, row(4.0), &fps_label, &mut fps) {
+        options.max_fps = 10 + (fps * 25.0).round() as u32 * 10;
+        changed = true;
+    }
+    let vsync_label = if options.vsync { "VSync: ON" } else { "VSync: OFF" };
+    if ui.button(row(5.0), vsync_label, true) {
+        options.vsync = !options.vsync;
         changed = true;
     }
 

@@ -89,6 +89,8 @@ pub struct SceneScript {
     /// Seconds to run after the world has loaded.
     pub wait: f32,
     pub screenshot: PathBuf,
+    /// Turn VSync off and log frame rate and per-stage frame times.
+    pub benchmark: bool,
 }
 
 impl Default for SceneScript {
@@ -112,6 +114,7 @@ impl Default for SceneScript {
             fill: Vec::new(),
             wait: 2.0,
             screenshot: PathBuf::from("scene.png"),
+            benchmark: false,
         }
     }
 }
@@ -172,6 +175,35 @@ fn key_code(name: &str) -> Result<KeyCode> {
     })
 }
 
+/// Time spent in each part of the frame, summed over the scene.
+#[derive(Default)]
+pub struct FrameTimes {
+    pub frames: u32,
+    pub simulate: f64,
+    pub chunks: f64,
+    pub gui: f64,
+    pub scene: f64,
+    pub render: f64,
+}
+
+impl FrameTimes {
+    pub fn report(&self, seconds: f32) {
+        let n = self.frames.max(1) as f64;
+        let ms = |t: f64| t / n * 1000.0;
+        log::info!(
+            "benchmark: {} frames in {seconds:.1} s = {:.0} fps; per frame: simulate {:.2} ms, chunks {:.2} ms, \
+             gui {:.2} ms, scene {:.2} ms, render {:.2} ms",
+            self.frames,
+            self.frames as f32 / seconds,
+            ms(self.simulate),
+            ms(self.chunks),
+            ms(self.gui),
+            ms(self.scene),
+            ms(self.render),
+        );
+    }
+}
+
 /// A scene being played.
 pub struct SceneRun {
     pub script: SceneScript,
@@ -179,6 +211,7 @@ pub struct SceneRun {
     /// When the world finished loading.
     pub started: Option<Instant>,
     pub screenshot_taken: bool,
+    pub times: FrameTimes,
 }
 
 impl SceneRun {
@@ -186,7 +219,7 @@ impl SceneRun {
     pub fn new(script: SceneScript) -> Result<(Self, WorldEntry)> {
         let folder = std::env::temp_dir().join(format!("rscraft-scene-{}", std::process::id()));
         let entry = saves::create_world_at(folder.clone(), "Scene", &script.seed, script.game_mode)?;
-        Ok((Self { script, folder, started: None, screenshot_taken: false }, entry))
+        Ok((Self { script, folder, started: None, screenshot_taken: false, times: FrameTimes::default() }, entry))
     }
 
     /// Whether the scene has run long enough to take its screenshot.

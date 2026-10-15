@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
@@ -58,6 +58,8 @@ struct State {
     frames: u32,
     fps: u32,
     scene: Option<SceneRun>,
+    /// When the next frame may start, under the frame rate cap.
+    next_frame: Instant,
 }
 
 pub struct App {
@@ -99,7 +101,7 @@ impl ApplicationHandler for App {
             &self.sky_images,
             &atlas,
             &self.entity_images,
-            options.render_distance,
+            &options,
         ));
         let layers = Arc::new(self.images.layers.clone());
         let session = Session::backdrop(&layers, &options, aspect);
@@ -126,6 +128,7 @@ impl ApplicationHandler for App {
             frames: 0,
             fps: 0,
             scene: None,
+            next_frame: Instant::now(),
         });
         if let Some(script) = self.scene.take()
             && let Some(state) = &mut self.state
@@ -237,9 +240,27 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = self.state.as_mut() else { return };
+        // The Max Framerate cap: sleep until the next frame is due. Scenes
+        // run uncapped so they finish quickly.
+        let limit = state.options.fps_limit().filter(|_| state.scene.is_none());
+        let now = Instant::now();
+        match limit {
+            Some(_) if now < state.next_frame => {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(state.next_frame));
+            }
+            Some(fps) => {
+                // Catch up at most one frame, so a stall isn't followed by a burst.
+                let interval = Duration::from_secs_f64(1.0 / fps as f64);
+                state.next_frame = (state.next_frame + interval).max(now);
+                event_loop.set_control_flow(ControlFlow::Poll);
+                state.window.request_redraw();
+            }
+            None => {
+                event_loop.set_control_flow(ControlFlow::Poll);
+                state.window.request_redraw();
+            }
         }
     }
 }
@@ -385,7 +406,9 @@ impl State {
             None
         };
 
+        let t_simulate = Instant::now();
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
+        let t_chunks = Instant::now();
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
             if *progress >= 1.0 {
@@ -448,6 +471,7 @@ impl State {
 
         // World.
         let perspective = if self.in_world() { self.perspective } else { Perspective::FirstPerson };
+        let t_gui = Instant::now();
         let scene = self.session.scene(perspective, &self.layers, seconds);
         let chunks = &self.session.chunks;
         self.renderer.prepare_shadows(&scene.shadows, &|pos| chunks.block_at(pos));
@@ -457,6 +481,7 @@ impl State {
         });
         let camera = self.session.camera.for_perspective(perspective);
         let underwater = self.session.underwater(&camera, dt);
+        let t_scene = Instant::now();
         self.renderer.render(Frame {
             camera: &camera,
             sky: &self.session.day.state(),
@@ -479,6 +504,18 @@ impl State {
             preview: preview.as_ref(),
         });
         self.ui.input.end_frame();
+        if let Some(run) = &mut self.scene
+            && run.started.is_some()
+        {
+            let times = &mut run.times;
+            let since = |a: Instant, b: Instant| (b - a).as_secs_f64();
+            times.frames += 1;
+            times.simulate += since(now, t_simulate);
+            times.chunks += since(t_simulate, t_chunks);
+            times.gui += since(t_chunks, t_gui);
+            times.scene += since(t_gui, t_scene);
+            times.render += since(t_scene, Instant::now());
+        }
 
         self.frames += 1;
         let elapsed = self.fps_timer.elapsed().as_secs_f32();
@@ -523,6 +560,9 @@ impl State {
         }
         self.perspective = script.perspective.into();
         self.show_debug = script.debug;
+        if script.benchmark {
+            self.renderer.set_vsync(false);
+        }
         match script.screen {
             SceneScreen::None => {}
             SceneScreen::Inventory => self.open(Screen::Inventory),
@@ -549,6 +589,9 @@ impl State {
         if run.due() {
             self.renderer.request_screenshot(run.script.screenshot.clone());
             run.screenshot_taken = true;
+            if run.script.benchmark {
+                run.times.report(run.script.wait);
+            }
         }
     }
 
@@ -584,6 +627,7 @@ impl State {
             Action::Quit => self.quit = true,
             Action::ApplyOptions => {
                 self.session.camera.set_fov(self.options.fov);
+                self.renderer.set_vsync(self.options.vsync);
                 if self.in_world() {
                     self.session.chunks.set_render_distance(self.options.render_distance);
                     self.renderer.set_render_distance(self.options.render_distance);
