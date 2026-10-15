@@ -40,7 +40,7 @@ const SPAWN_RADIUS: i32 = 2;
 const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 
 /// Seconds for a full arm swing.
-const SWING_SECONDS: f32 = 0.3;
+const SWING_SECONDS: f32 = 0.2;
 /// FOV multiplier while sprinting, like vanilla.
 const SPRINT_FOV: f32 = 1.1;
 /// Zoom while holding C, like OptiFine; the mouse wheel changes it.
