@@ -759,7 +759,9 @@ impl State {
         let held_block = self.in_world().then(|| self.session.inventory.selected_stack()).flatten().map(|s| s.block);
         // First person shows what the switching animation says it holds.
         let shown_block = self.session.shown_item;
-        let mut world_items = self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p));
+        let player_feet = self.session.player.as_ref().map(PlayerController::feet);
+        let mut world_items =
+            self.session.items.build_mesh(&self.layers, seconds, player_feet, |p| self.session.light_at(p));
         let view_camera = self.session.camera.for_perspective(perspective);
         let particle_mesh = self.session.particles.build_mesh(
             view_camera.right(),

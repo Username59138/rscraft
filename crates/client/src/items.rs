@@ -18,6 +18,15 @@ const PICKUP_RANGE: f32 = 1.5;
 const PICKUP_DELAY: f32 = 0.5;
 /// Items disappear after 5 minutes.
 const LIFETIME: f32 = 300.0;
+/// Picked-up items fly into the player over 3 ticks (ItemPickupParticle).
+const PICKUP_SECONDS: f32 = 3.0 * TICK_SECONDS;
+
+/// A picked-up item on its way into the player; already in the inventory.
+struct Pickup {
+    block: Block,
+    from: Vec3,
+    elapsed: f32,
+}
 
 struct DroppedItem {
     block: Block,
@@ -33,6 +42,7 @@ struct DroppedItem {
 #[derive(Default)]
 pub struct Items {
     items: Vec<DroppedItem>,
+    pickups: Vec<Pickup>,
     accumulator: f32,
 }
 
@@ -86,12 +96,23 @@ impl Items {
 
         if let Some(feet) = feet {
             let center = feet + Vec3::Y * 0.9;
+            let alpha = self.accumulator / TICK_SECONDS;
             for item in &mut self.items {
                 if item.age >= PICKUP_DELAY && item.position.distance(center) < PICKUP_RANGE {
+                    let before = item.count;
                     item.count = inventory.add(item.block, item.count);
+                    if item.count < before {
+                        // Start from where it was drawn, bob included.
+                        let from = item.previous.lerp(item.position, alpha) + Vec3::Y * 0.1;
+                        self.pickups.push(Pickup { block: item.block, from, elapsed: 0.0 });
+                    }
                 }
             }
         }
+        for pickup in &mut self.pickups {
+            pickup.elapsed += dt;
+        }
+        self.pickups.retain(|p| p.elapsed < PICKUP_SECONDS && feet.is_some());
         self.items.retain(|item| item.count > 0 && item.age < LIFETIME);
     }
 
@@ -112,8 +133,22 @@ impl Items {
 
     /// Spinning, bobbing cubes, ready to draw with the solid block pipeline.
     /// `light` gives the sky light level (0..1) at a position.
-    pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32, light: impl Fn(Vec3) -> f32) -> MeshData {
+    /// `player` is where picked-up items fly to (the player's feet).
+    pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32, player: Option<Vec3>, light: impl Fn(Vec3) -> f32) -> MeshData {
         let mut mesh = MeshData::default();
+        if let Some(feet) = player {
+            // Vanilla eases in quadratically towards the middle of the player.
+            let target = feet + Vec3::Y * 0.5;
+            for pickup in &self.pickups {
+                let t = (pickup.elapsed / PICKUP_SECONDS).min(1.0);
+                let position = pickup.from.lerp(target, t * t);
+                let transform = Mat4::from_translation(position)
+                    * Mat4::from_rotation_y(seconds)
+                    * Mat4::from_scale(Vec3::splat(HALF_SIZE * 2.0))
+                    * Mat4::from_translation(Vec3::splat(-0.5));
+                mesh.push_block(pickup.block, layers, transform, light(position));
+            }
+        }
         for (i, (item, position)) in self.items.iter().zip(self.render_positions()).enumerate() {
             let phase = seconds + i as f32 * 1.7;
             let bob = (phase * 2.0).sin() * 0.05 + 0.1;
