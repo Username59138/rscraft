@@ -7,9 +7,11 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
 use rscraft_world::fluid::{FluidTicks, FluidWorld, WATER_TICK_DELAY};
+use rscraft_world::random_ticks::{self, RandomTickWorld, RandomTicks};
 use rscraft_world::{
     Block, ColumnGroup, ColumnLight, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section,
 };
+use rustc_hash::FxHashMap;
 
 use crate::mesh::{Neighborhood, SectionMesh};
 use crate::renderer::Renderer;
@@ -18,6 +20,10 @@ use crate::texture::BlockLayers;
 /// Columns being generated at once. Keeps the queue short so that the
 /// closest columns are always picked first when the player moves.
 const MAX_GENERATING: usize = 32;
+
+/// Columns this close to the player (in columns) get random ticks: vanilla's
+/// default simulation distance.
+const SIMULATION_DISTANCE: i32 = 12;
 
 /// Blocks changed by the player, per column, by world position. Applied on
 /// top of freshly generated terrain and saved with the world.
@@ -38,26 +44,27 @@ pub struct ChunkManager {
     /// Column offsets within render distance, closest first.
     load_order: Vec<IVec2>,
 
-    columns: HashMap<IVec2, ColumnState>,
-    sections: HashMap<IVec3, Arc<Section>>,
+    columns: FxHashMap<IVec2, ColumnState>,
+    sections: FxHashMap<IVec3, Arc<Section>>,
     generating: usize,
     edits: Edits,
     /// Bumped every time a column is (re)meshed, so results of outdated
     /// meshing jobs can be told apart and dropped.
-    mesh_versions: HashMap<IVec2, u32>,
+    mesh_versions: FxHashMap<IVec2, u32>,
 
     generated_tx: Sender<(IVec2, Vec<Section>)>,
     generated_rx: Receiver<(IVec2, Vec<Section>)>,
     meshed_tx: Sender<(IVec3, u32, SectionMesh)>,
     meshed_rx: Receiver<(IVec3, u32, SectionMesh)>,
     /// Sky light of each meshed column, for lighting entities.
-    light: HashMap<IVec2, ColumnLight>,
+    light: FxHashMap<IVec2, ColumnLight>,
     lit_tx: Sender<(IVec2, u32, ColumnLight)>,
     lit_rx: Receiver<(IVec2, u32, ColumnLight)>,
 
     /// Game ticks since the world was opened.
     game_time: u64,
     fluid_ticks: FluidTicks,
+    random_ticks: RandomTicks,
 }
 
 pub fn column_of(position: Vec3) -> IVec2 {
@@ -75,20 +82,21 @@ impl ChunkManager {
             layers,
             render_distance,
             load_order,
-            columns: HashMap::new(),
-            sections: HashMap::new(),
+            columns: FxHashMap::default(),
+            sections: FxHashMap::default(),
             generating: 0,
             edits,
-            mesh_versions: HashMap::new(),
+            mesh_versions: FxHashMap::default(),
             generated_tx,
             generated_rx,
             meshed_tx,
             meshed_rx,
-            light: HashMap::new(),
+            light: FxHashMap::default(),
             lit_tx,
             lit_rx,
             game_time: 0,
             fluid_ticks: FluidTicks::default(),
+            random_ticks: RandomTicks::new(0x9e37_79b9_7f4a_7c15),
         }
     }
 
@@ -128,12 +136,37 @@ impl ChunkManager {
         true
     }
 
-    /// One game tick of the world itself: flowing water.
-    pub fn tick(&mut self) {
+    /// One game tick of the world itself: flowing water, and random ticks
+    /// (grass) around the player at `player`. `day_time` is the fraction of
+    /// the day, which decides how bright the sky is.
+    pub fn tick(&mut self, player: Option<Vec3>, day_time: f32) {
         self.game_time += 1;
         let mut ticks = std::mem::take(&mut self.fluid_ticks);
         ticks.run(self, self.game_time);
         self.fluid_ticks = ticks;
+
+        let Some(player) = player else { return };
+        let center = column_of(player);
+        let r = SIMULATION_DISTANCE.min(self.render_distance);
+        // Like vanilla, only sections that may hold a ticking block, and
+        // only in columns whose neighbours are loaded too.
+        let sections: Vec<(IVec3, Arc<Section>)> = self
+            .load_order
+            .iter()
+            .take_while(|o| o.length_squared() <= r * r)
+            .map(|o| center + o)
+            .filter(|c| self.columns.get(c) == Some(&ColumnState::Meshed))
+            .flat_map(|c| (0..SECTIONS_PER_COLUMN as i32).map(move |y| IVec3::new(c.x, MIN_SECTION_Y + y, c.y)))
+            .filter_map(|pos| {
+                self.sections.get(&pos).filter(|s| matches!(***s, Section::Blocks(_))).map(|s| (pos, s.clone()))
+            })
+            .collect();
+        let darken = random_ticks::sky_darken(day_time);
+        let mut random = std::mem::replace(&mut self.random_ticks, RandomTicks::new(0));
+        for (pos, blocks) in sections {
+            random.tick_section(self, pos, &blocks, darken);
+        }
+        self.random_ticks = random;
     }
 
     /// Water updates still to come, to save with the world.
@@ -344,5 +377,19 @@ impl FluidWorld for ChunkManager {
 
     fn set_block(&mut self, pos: IVec3, block: Block) -> bool {
         self.put_block(pos, block)
+    }
+}
+
+impl RandomTickWorld for ChunkManager {
+    fn block(&self, pos: IVec3) -> Option<Block> {
+        self.block_at(pos)
+    }
+
+    fn set_block(&mut self, pos: IVec3, block: Block) {
+        ChunkManager::set_block(self, pos, block);
+    }
+
+    fn sky_light(&self, pos: IVec3) -> u8 {
+        self.sky_light_at(pos)
     }
 }

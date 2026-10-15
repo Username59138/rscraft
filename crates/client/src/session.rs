@@ -250,7 +250,8 @@ impl Session {
     /// One game tick: water flows, the player moves, dropped items fall and
     /// get picked up, splashes and particles play.
     fn tick(&mut self, controls: Controls) {
-        self.chunks.tick();
+        let player = self.player.as_ref().map(|p| p.position);
+        self.chunks.tick(player, self.day.time);
         self.hand.tick(self.inventory.selected_stack().map(|s| s.block), view_angles(&self.camera));
         let chunks = &self.chunks;
         let world = |pos| chunks.block_at(pos);

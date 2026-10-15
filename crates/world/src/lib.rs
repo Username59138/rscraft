@@ -10,6 +10,7 @@ pub mod generator;
 pub mod inventory;
 pub mod light;
 pub mod movement;
+pub mod random_ticks;
 pub mod raycast;
 pub mod section;
 
