@@ -140,6 +140,30 @@ impl Block {
         }
     }
 
+    /// Minecraft's id without the namespace, e.g. `oak_log`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Block::Air => "air",
+            Block::Stone => "stone",
+            Block::Dirt => "dirt",
+            Block::Grass => "grass_block",
+            Block::Sand => "sand",
+            Block::Gravel => "gravel",
+            Block::Bedrock => "bedrock",
+            Block::Water => "water",
+            Block::OakLog => "oak_log",
+            Block::OakLeaves => "oak_leaves",
+            Block::OakPlanks => "oak_planks",
+            Block::CraftingTable => "crafting_table",
+        }
+    }
+
+    /// The block with this id, with or without the `minecraft:` namespace.
+    pub fn from_name(name: &str) -> Option<Block> {
+        let name = name.strip_prefix("minecraft:").unwrap_or(name);
+        Block::ALL.into_iter().find(|b| b.id() == name)
+    }
+
     /// Display name, like vanilla's.
     pub fn name(self) -> &'static str {
         match self {

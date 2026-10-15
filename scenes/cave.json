@@ -1,0 +1,11 @@
+{
+  "position": [-7.5, 50.0, 24.5],
+  "pitch": -15,
+  "fill": [
+    { "from": [-11, 50, 21], "to": [-4, 53, 28], "block": "air" },
+    { "from": [-6, 54, 21], "to": [-5, 80, 22], "block": "air" }
+  ],
+  "hotbar": [["oak_log", 1]],
+  "wait": 2,
+  "screenshot": "out/cave.png"
+}

@@ -1,0 +1,8 @@
+{
+  "position": [-7.5, 65.0, 24.5],
+  "yaw": 0,
+  "pitch": -10,
+  "hotbar": [["oak_log", 5], ["dirt", 20]],
+  "wait": 2,
+  "screenshot": "out/forest.png"
+}

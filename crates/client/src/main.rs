@@ -13,8 +13,11 @@ mod particles;
 mod player;
 mod renderer;
 mod saves;
+mod scene;
 mod screens;
+mod screenshot;
 mod selection;
+mod session;
 mod shadows;
 mod sky;
 mod switcher;
@@ -27,6 +30,19 @@ use winit::event_loop::{ControlFlow, EventLoop};
 pub const MC_VERSION: &str = "26.3";
 
 fn main() {
+    // `--scene file.json` plays a scripted test scene; see scene.rs.
+    let args: Vec<String> = std::env::args().collect();
+    let scene = match args.iter().position(|a| a == "--scene").and_then(|i| args.get(i + 1)) {
+        Some(path) => match scene::SceneScript::load(std::path::Path::new(path)) {
+            Ok(script) => Some(script),
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn"))
         .init();
 
@@ -74,6 +90,6 @@ fn main() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = app::App::new(block_images, sky_images, atlas, renderer::EntityImages { skin, shadow });
+    let mut app = app::App::new(block_images, sky_images, atlas, renderer::EntityImages { skin, shadow }, scene);
     event_loop.run_app(&mut app).expect("event loop error");
 }

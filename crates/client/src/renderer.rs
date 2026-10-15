@@ -175,6 +175,8 @@ pub struct Renderer {
     pub drawn_sections: usize,
     /// GPU name and graphics API, for the debug screen.
     pub gpu: String,
+    /// Where to save the next frame, if requested.
+    screenshot: Option<std::path::PathBuf>,
 }
 
 impl Renderer {
@@ -222,7 +224,8 @@ impl Renderer {
             adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
         let ui_format = if can_reinterpret && gamma_format != format { gamma_format } else { format };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // COPY_SRC, where supported, lets frames be saved as screenshots.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
@@ -401,6 +404,7 @@ impl Renderer {
             fog_end: fog_end(render_distance),
             drawn_sections: 0,
             gpu: format!("{} ({:?})", info.name, info.backend),
+            screenshot: None,
         }
     }
 
@@ -598,7 +602,18 @@ impl Renderer {
             self.draw_preview(&mut encoder, &view, preview);
         }
         self.queue.submit([encoder.finish()]);
+        if let Some(path) = self.screenshot.take() {
+            match crate::screenshot::save(&self.device, &self.queue, &frame.texture, &path) {
+                Ok(()) => log::info!("saved screenshot {}", path.display()),
+                Err(err) => log::error!("screenshot: {err:#}"),
+            }
+        }
         self.queue.present(frame);
+    }
+
+    /// Saves the next rendered frame to `path`.
+    pub fn request_screenshot(&mut self, path: std::path::PathBuf) {
+        self.screenshot = Some(path);
     }
 }
 

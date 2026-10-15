@@ -1,0 +1,9 @@
+{
+  "position": [-7.5, 65.0, 24.5],
+  "yaw": 180,
+  "perspective": "front",
+  "keys": ["KeyW"],
+  "hotbar": [["oak_log", 1]],
+  "wait": 1.5,
+  "screenshot": "out/third_person_walk.png"
+}

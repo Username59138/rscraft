@@ -1,0 +1,7 @@
+{
+  "position": [-7.5, 65.0, 24.5],
+  "screen": "inventory",
+  "hotbar": [["oak_log", 5], ["stone", 20], ["oak_planks", 4]],
+  "wait": 1,
+  "screenshot": "out/inventory.png"
+}

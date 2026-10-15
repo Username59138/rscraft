@@ -209,6 +209,11 @@ pub fn create_world(name: &str, seed_text: &str, game_mode: GameMode) -> Result<
         folder = worlds_dir().join(format!("{base} ({n})"));
         n += 1;
     }
+    create_world_at(folder, name, seed_text, game_mode)
+}
+
+/// Creates a world in a given folder, e.g. a temporary one for test scenes.
+pub fn create_world_at(folder: PathBuf, name: &str, seed_text: &str, game_mode: GameMode) -> Result<WorldEntry> {
     let now = now();
     let entry = WorldEntry {
         folder,
