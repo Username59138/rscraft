@@ -372,8 +372,12 @@ impl State {
         } else if !self.in_world() {
             self.session.camera.yaw += dt * 0.03;
         }
+        // The world ticks unless paused; the view follows every frame.
+        if let Some(controls) = controls {
+            self.session.update(dt, controls);
+        }
         let zoom = self.playing() && self.input.is_pressed(KeyCode::KeyC);
-        self.session.update_player(dt, controls, self.options.fov, zoom);
+        self.session.update_view(dt, self.options.fov, zoom);
         let target = if self.playing() {
             self.session.interact(dt, self.input.attack, self.input.use_item)
         } else {
@@ -382,10 +386,6 @@ impl State {
         };
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
-        // Items and particles run with the world, inventory open or not.
-        if self.world_running() {
-            self.session.update_world(dt);
-        }
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
             if *progress >= 1.0 {

@@ -3,19 +3,21 @@
 
 use glam::{IVec3, Vec3};
 
+use crate::Block;
 use crate::inventory::Inventory;
-use crate::{Block, TICK_SECONDS};
 
 /// Half the size of a dropped item's box (vanilla draws them at 1/4 scale).
 pub const HALF_SIZE: f32 = 0.125;
 const GRAVITY: f32 = 0.04;
 const PICKUP_RANGE: f32 = 1.5;
 /// Items can't be picked up for 10 ticks after they appear, like vanilla.
-const PICKUP_DELAY: f32 = 0.5;
+const PICKUP_DELAY: u32 = 10;
+/// Thrown items wait longer, so they aren't picked straight back up.
+const THROW_PICKUP_DELAY: u32 = 40;
 /// Items disappear after 5 minutes.
-const LIFETIME: f32 = 300.0;
+const LIFETIME: u32 = 6000;
 /// Picked-up items fly into the player over 3 ticks (ItemPickupParticle).
-const PICKUP_SECONDS: f32 = 3.0 * TICK_SECONDS;
+const PICKUP_TICKS: u32 = 3;
 /// Picked-up items fly to this height above the player's feet.
 const PICKUP_TARGET_HEIGHT: f32 = 0.5;
 
@@ -23,7 +25,8 @@ const PICKUP_TARGET_HEIGHT: f32 = 0.5;
 struct Pickup {
     block: Block,
     from: Vec3,
-    elapsed: f32,
+    /// Ticks since it was picked up.
+    age: u32,
 }
 
 struct DroppedItem {
@@ -34,14 +37,15 @@ struct DroppedItem {
     previous: Vec3,
     velocity: Vec3,
     on_ground: bool,
-    age: f32,
+    /// Ticks since it appeared, and how many before it can be picked up.
+    age: u32,
+    pickup_delay: u32,
 }
 
 #[derive(Default)]
 pub struct DroppedItems {
     items: Vec<DroppedItem>,
     pickups: Vec<Pickup>,
-    accumulator: f32,
 }
 
 /// Tiny pseudo-random number in -1..1 for scattering drops.
@@ -64,7 +68,8 @@ impl DroppedItems {
             previous: position,
             velocity: Vec3::new(jitter(seed) * 0.1, 0.2, jitter(seed + 1.0) * 0.1),
             on_ground: false,
-            age: 0.0,
+            age: 0,
+            pickup_delay: PICKUP_DELAY,
         });
     }
 
@@ -77,67 +82,53 @@ impl DroppedItems {
             previous: eye - Vec3::Y * 0.3,
             velocity: direction * 0.3 + Vec3::Y * 0.1,
             on_ground: false,
-            age: -1.0, // A longer pickup delay, so it isn't picked straight back up.
+            age: 0,
+            pickup_delay: THROW_PICKUP_DELAY,
         });
     }
 
-    pub fn update(
-        &mut self,
-        dt: f32,
-        feet: Option<Vec3>,
-        inventory: &mut Inventory,
-        world: &impl Fn(IVec3) -> Option<Block>,
-    ) {
-        self.accumulator += dt;
-        while self.accumulator >= TICK_SECONDS {
-            self.accumulator -= TICK_SECONDS;
-            for item in &mut self.items {
-                item.tick(world);
-            }
+    /// One game tick: items fall, age, and are picked up by a player whose
+    /// feet are at `feet` (None if nobody can pick things up).
+    pub fn tick(&mut self, feet: Option<Vec3>, inventory: &mut Inventory, world: &impl Fn(IVec3) -> Option<Block>) {
+        for pickup in &mut self.pickups {
+            pickup.age += 1;
         }
+        self.pickups.retain(|p| p.age < PICKUP_TICKS);
         for item in &mut self.items {
-            item.age += dt;
+            item.tick(world);
+            item.age += 1;
         }
-
         if let Some(feet) = feet {
             let center = feet + Vec3::Y * 0.9;
-            let alpha = self.accumulator / TICK_SECONDS;
             for item in &mut self.items {
-                if item.age >= PICKUP_DELAY && item.position.distance(center) < PICKUP_RANGE {
+                if item.age >= item.pickup_delay && item.position.distance(center) < PICKUP_RANGE {
                     let before = item.count;
                     item.count = inventory.add(item.block, item.count);
                     if item.count < before {
                         // Start from where it was drawn, bob included.
-                        let from = item.previous.lerp(item.position, alpha) + Vec3::Y * 0.1;
-                        self.pickups.push(Pickup { block: item.block, from, elapsed: 0.0 });
+                        let from = item.position + Vec3::Y * 0.1;
+                        self.pickups.push(Pickup { block: item.block, from, age: 0 });
                     }
                 }
             }
+        } else {
+            self.pickups.clear();
         }
-        for pickup in &mut self.pickups {
-            pickup.elapsed += dt;
-        }
-        self.pickups.retain(|p| p.elapsed < PICKUP_SECONDS && feet.is_some());
         self.items.retain(|item| item.count > 0 && item.age < LIFETIME);
     }
 
-    fn alpha(&self) -> f32 {
-        self.accumulator / TICK_SECONDS
-    }
-
-    /// Every item lying in the world and where to draw it this frame,
-    /// between its last two ticks.
-    pub fn visible(&self) -> impl Iterator<Item = (Block, Vec3)> + '_ {
-        let alpha = self.alpha();
-        self.items.iter().map(move |item| (item.block, item.previous.lerp(item.position, alpha)))
+    /// Every item lying in the world and where to draw it, `partial` of the
+    /// way between its last two ticks.
+    pub fn visible(&self, partial: f32) -> impl Iterator<Item = (Block, Vec3)> + '_ {
+        self.items.iter().map(move |item| (item.block, item.previous.lerp(item.position, partial)))
     }
 
     /// Picked-up items flying into the player at `feet`, and where they are
     /// now. Vanilla eases them in quadratically towards the middle of the player.
-    pub fn flying_to(&self, feet: Vec3) -> impl Iterator<Item = (Block, Vec3)> + '_ {
+    pub fn flying_to(&self, feet: Vec3, partial: f32) -> impl Iterator<Item = (Block, Vec3)> + '_ {
         let target = feet + Vec3::Y * PICKUP_TARGET_HEIGHT;
         self.pickups.iter().map(move |pickup| {
-            let t = (pickup.elapsed / PICKUP_SECONDS).min(1.0);
+            let t = ((pickup.age as f32 + partial) / PICKUP_TICKS as f32).min(1.0);
             (pickup.block, pickup.from.lerp(target, t * t))
         })
     }

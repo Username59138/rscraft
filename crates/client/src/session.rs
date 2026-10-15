@@ -28,6 +28,9 @@ use crate::ui::Rect;
 /// World shown behind the title screen.
 const MENU_SEED: u32 = 1337;
 
+/// At most this many game ticks run in one frame, so a long hitch doesn't
+/// make the game fall further and further behind.
+const MAX_TICKS_PER_FRAME: u32 = 10;
 /// View bobbing strength; 1.0 is vanilla.
 const VIEW_BOB_STRENGTH: f32 = 0.7;
 /// How fast the hand lowers and rises when switching items, per second.
@@ -94,6 +97,8 @@ pub struct Session {
     /// Light on the player and what they hold, eased so shade sets in and
     /// lifts gradually instead of flickering block by block.
     pub player_light: f32,
+    /// Time since the last game tick, in seconds.
+    pub tick_time: f32,
     /// Seconds the camera has been under water, for vanilla's water vision.
     pub underwater_seconds: f32,
 }
@@ -158,6 +163,7 @@ impl Session {
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
             player_light: 1.0,
+            tick_time: 0.0,
             underwater_seconds: 0.0,
         }
     }
@@ -169,7 +175,7 @@ impl Session {
             Some(p) => (PlayerController::new(Vec3::from(p.position) - Vec3::Y * EYE_HEIGHT, p.flying), p.yaw, p.pitch),
             None => (PlayerController::new(find_spawn(&generator), false), 0.0, 0.0),
         };
-        let mut camera = Camera::new(aspect, player.eye(), yaw, pitch);
+        let mut camera = Camera::new(aspect, player.eye(0.0), yaw, pitch);
         camera.set_fov(options.fov);
         let inventory = entry.save.player.as_ref().map(PlayerSave::load_inventory).unwrap_or_default();
         let edits = entry.read_edits();
@@ -198,6 +204,7 @@ impl Session {
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
             player_light: 1.0,
+            tick_time: 0.0,
             underwater_seconds: 0.0,
         };
         session.apply_game_mode();
@@ -230,18 +237,53 @@ impl Session {
     }
 
     /// Advances the player one frame and moves the camera to their eyes.
-    pub fn update_player(&mut self, dt: f32, controls: Option<Controls>, fov: f32, zoom: bool) {
-        let Some(player) = &mut self.player else { return };
-        if let Some(controls) = controls {
-            let chunks = &self.chunks;
-            player.update(dt, controls, self.camera.yaw, &|pos| chunks.block_at(pos));
+    /// How far the current frame is between the last tick and the next.
+    pub fn partial(&self) -> f32 {
+        self.tick_time / TICK_SECONDS
+    }
+
+    /// Runs as many game ticks as `dt` covers, with the player using
+    /// `controls`. At most a few per frame, so a hitch doesn't snowball.
+    pub fn update(&mut self, dt: f32, controls: Controls) {
+        self.tick_time += dt;
+        let mut ticks = 0;
+        while self.tick_time >= TICK_SECONDS && ticks < MAX_TICKS_PER_FRAME {
+            self.tick_time -= TICK_SECONDS;
+            self.tick(controls);
+            ticks += 1;
         }
+        self.tick_time = self.tick_time.min(TICK_SECONDS);
+    }
+
+    /// One game tick: the player moves, dropped items fall and get picked
+    /// up, splashes and particles play.
+    fn tick(&mut self, controls: Controls) {
+        let chunks = &self.chunks;
+        let world = |pos| chunks.block_at(pos);
+        if let Some(player) = &mut self.player {
+            player.tick(controls, self.camera.yaw, &world);
+            if let Some((at, surface, velocity)) = player.splash.take() {
+                self.particles.water_splash(chunks.layers(), at, surface, 0.3, velocity);
+            }
+        }
+        // Spectators don't pick items up.
+        let feet = self.player.as_ref().filter(|_| !self.game_mode.is_spectator()).map(|p| p.position);
+        self.items.tick(feet, &mut self.inventory, &world);
+        self.particles.tick(self.camera.position, chunks.layers(), &world);
+    }
+
+    /// Per-frame updates of how things look: the camera follows the player's
+    /// eyes with view bobbing, FOV effects, the hand's swing and switching,
+    /// and the light on the player.
+    pub fn update_view(&mut self, dt: f32, fov: f32, zoom: bool) {
+        let partial = self.partial();
+        let Some(player) = &self.player else { return };
         // View bobbing, like vanilla: sway sideways and dip at every step.
-        let (walk, bob) = player.bobbing();
+        let (walk, bob) = player.bobbing(partial);
         let bob = bob * VIEW_BOB_STRENGTH;
         let phase = walk * std::f32::consts::PI;
         let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
-        self.camera.position = player.eye() + offset;
+        self.camera.position = player.eye(partial) + offset;
         // Plus vanilla's small tilt: a sideways roll (3°) and a nod (5°) per step.
         self.camera.bob_roll = (phase.sin() * bob * 3.0).to_radians();
         self.camera.bob_pitch = ((phase - 0.2).cos() * bob * 5.0).abs().to_radians();
@@ -255,8 +297,7 @@ impl Session {
         let zoom_target = if zoom { 1.0 / self.zoom_level } else { 1.0 };
         self.zoom_fov += (zoom_target - self.zoom_fov) * smoothing;
         self.camera.set_fov(fov * self.sprint_fov * self.zoom_fov);
-        // Switching items lowers the hand out of view, swaps what it shows,
-        // then raises it again, like vanilla (0.4 of the way per tick).
+
         // The darkest of the blocks the player's body is in (feet, middle,
         // eyes), so standing half under a ledge or canopy already shades
         // them; darkening is quick, brightening slower, so shade lingers.
@@ -266,6 +307,8 @@ impl Session {
         let rate = if target < self.player_light { 8.0 } else { 2.5 };
         self.player_light += (target - self.player_light) * (dt * rate).min(1.0);
 
+        // Switching items lowers the hand out of view, swaps what it shows,
+        // then raises it again, like vanilla (0.4 of the way per tick).
         let held = self.inventory.selected_stack().map(|s| s.block);
         let target = if held == self.shown_item { 1.0 } else { 0.0 };
         let step = EQUIP_SPEED * dt;
@@ -305,7 +348,7 @@ impl Session {
     /// Breaking and placing blocks with the mouse buttons held. Returns the
     /// block under the crosshair and its breaking progress.
     pub fn interact(&mut self, dt: f32, attack: bool, use_item: bool) -> Option<(Hit, f32)> {
-        let eye = self.player.as_ref()?.eye();
+        let eye = self.player.as_ref()?.eye(self.partial());
         // Spectators can't touch the world; no outline either.
         if self.game_mode.is_spectator() {
             self.breaking = None;
@@ -393,7 +436,7 @@ impl Session {
         for _ in 0..count {
             self.inventory.take_selected();
         }
-        self.items.throw(player.eye(), self.camera.forward(), stack.block, count);
+        self.items.throw(player.eye(self.partial()), self.camera.forward(), stack.block, count);
     }
 
     /// Puts the stack held by the mouse back, dropping what doesn't fit.
@@ -407,7 +450,7 @@ impl Session {
             if left > 0
                 && let Some(player) = &self.player
             {
-                self.items.throw(player.eye(), self.camera.forward(), stack.block, left);
+                self.items.throw(player.eye(self.partial()), self.camera.forward(), stack.block, left);
             }
         }
     }
@@ -462,37 +505,25 @@ impl Session {
         })
     }
 
-    /// One frame of the world running: dropped items fall and get picked
-    /// up, splashes and particles play.
-    pub fn update_world(&mut self, dt: f32) {
-        // Spectators don't pick items up.
-        let feet = self.player.as_ref().filter(|_| !self.game_mode.is_spectator()).map(PlayerController::feet);
-        let chunks = &self.chunks;
-        self.items.update(dt, feet, &mut self.inventory, &|pos| chunks.block_at(pos));
-        if let Some((at, surface, velocity)) = self.player.as_mut().and_then(|p| p.splash.take()) {
-            self.particles.water_splash(chunks.layers(), at, surface, 0.3, velocity);
-        }
-        self.particles.update(dt, self.camera.position, chunks.layers(), &|pos| chunks.block_at(pos));
-    }
-
     /// The meshes of everything in the world besides terrain, as seen from
     /// `perspective` this frame.
     pub fn scene(&self, perspective: Perspective, layers: &BlockLayers, seconds: f32) -> Scene {
         let spectator = self.game_mode.is_spectator();
         let visible_body = perspective != Perspective::FirstPerson && !spectator;
-        let feet = self.player.as_ref().map(PlayerController::feet);
+        let partial = self.partial();
+        let feet = self.player.as_ref().map(|p| p.feet(partial));
         let light = |p: Vec3| self.light_at(p);
         let mut scene = Scene {
             player: visible_body.then(|| self.pose().map(|pose| player::build_mesh(&pose))).flatten(),
             hand: None,
-            items: item_render::build_mesh(&self.items, layers, seconds, feet, light),
+            items: item_render::build_mesh(&self.items, layers, seconds, partial, feet, light),
             particles: {
                 let camera = self.camera.for_perspective(perspective);
                 let up = camera.right().cross(camera.forward()).normalize();
-                self.particles.build_mesh(camera.right(), up, light)
+                self.particles.build_mesh(partial, camera.right(), up, light)
             },
             held: MeshData::default(),
-            shadows: item_render::shadow_casters(&self.items).collect(),
+            shadows: item_render::shadow_casters(&self.items, partial).collect(),
         };
 
         // Like vanilla, a held block replaces the bare hand in first person
@@ -534,14 +565,14 @@ impl Session {
 
     pub fn pose(&self) -> Option<PlayerPose> {
         let player = self.player.as_ref()?;
-        let (walk, bob) = player.bobbing();
+        let (walk, bob) = player.bobbing(self.partial());
         Some(PlayerPose {
-            feet: player.feet(),
+            feet: player.feet(self.partial()),
             yaw: self.camera.yaw,
             head_pitch: self.camera.pitch,
             swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
             light: self.player_light,
-            swim: player.swim_amount(),
+            swim: player.swim_amount(self.partial()),
             head_yaw: 0.0,
             limb_phase: walk * 3.6,
         })
@@ -549,10 +580,10 @@ impl Session {
 
     pub fn hand(&self) -> Option<HandPose> {
         let player = self.player.as_ref()?;
-        let (walk, bob) = player.bobbing();
+        let (walk, bob) = player.bobbing(self.partial());
         let phase = walk * std::f32::consts::PI;
         Some(HandPose {
-            eye: player.eye(),
+            eye: player.eye(self.partial()),
             yaw: self.camera.yaw,
             pitch: self.camera.pitch,
             swing: self.swing,

@@ -7,7 +7,6 @@ use rscraft_world::{Block, Face};
 
 use crate::mesh::{MeshData, Vertex};
 use crate::texture::{BlockLayers, SPLASH_FRAMES};
-use rscraft_world::TICK_SECONDS;
 
 /// Particles alive at once; the oldest go first.
 const MAX_PARTICLES: usize = 6000;
@@ -60,12 +59,11 @@ impl Rng {
 pub struct Particles {
     particles: Vec<Particle>,
     rng: Rng,
-    accumulator: f32,
 }
 
 impl Default for Particles {
     fn default() -> Self {
-        Self { particles: Vec::new(), rng: Rng(0x9e37_79b9), accumulator: 0.0 }
+        Self { particles: Vec::new(), rng: Rng(0x9e37_79b9) }
     }
 }
 
@@ -194,16 +192,14 @@ impl Particles {
         }
     }
 
-    pub fn update(&mut self, dt: f32, camera: Vec3, layers: &BlockLayers, world: &impl Fn(IVec3) -> Option<Block>) {
-        self.accumulator += dt;
-        while self.accumulator >= TICK_SECONDS {
-            self.accumulator -= TICK_SECONDS;
-            self.spawn_ambient(camera, layers, world);
-            for particle in &mut self.particles {
-                particle.tick(world);
-            }
-            self.particles.retain(|p| p.age < p.lifetime);
+    /// One game tick: particles move and age; still water near the camera
+    /// releases suspended specks.
+    pub fn tick(&mut self, camera: Vec3, layers: &BlockLayers, world: &impl Fn(IVec3) -> Option<Block>) {
+        self.spawn_ambient(camera, layers, world);
+        for particle in &mut self.particles {
+            particle.tick(world);
         }
+        self.particles.retain(|p| p.age < p.lifetime);
     }
 
     /// Still water around the camera now and then releases a suspended speck,
@@ -227,8 +223,15 @@ impl Particles {
     }
 
     /// Camera-facing squares, drawn with the solid block pipeline.
-    pub fn build_mesh(&self, camera_right: Vec3, camera_up: Vec3, light: impl Fn(Vec3) -> f32) -> MeshData {
-        let alpha = self.accumulator / TICK_SECONDS;
+    /// `partial` is how far the frame is between the last two ticks.
+    pub fn build_mesh(
+        &self,
+        partial: f32,
+        camera_right: Vec3,
+        camera_up: Vec3,
+        light: impl Fn(Vec3) -> f32,
+    ) -> MeshData {
+        let alpha = partial;
         let mut mesh = MeshData::default();
         for p in &self.particles {
             let center = p.previous.lerp(p.position, alpha);

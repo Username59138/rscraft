@@ -2,7 +2,7 @@
 //! constants for walking, sprinting, jumping, swimming and flying, and
 //! axis-by-axis collision against block boxes.
 
-use crate::{Block, TICK_SECONDS};
+use crate::Block;
 use glam::{IVec3, Vec2, Vec3};
 
 const HALF_WIDTH: f32 = 0.3;
@@ -98,7 +98,6 @@ pub struct PlayerController {
     /// Set on the tick the player falls into water: where, the water
     /// surface height and the speed, for the splash effect.
     pub splash: Option<(Vec3, f32, Vec3)>,
-    accumulator: f32,
     ticks: u32,
     jump_held: bool,
     last_jump_press: Option<u32>,
@@ -131,7 +130,6 @@ impl PlayerController {
             swim_amount: 0.0,
             previous_swim_amount: 0.0,
             splash: None,
-            accumulator: 0.0,
             ticks: 0,
             jump_held: false,
             last_jump_press: None,
@@ -144,34 +142,31 @@ impl PlayerController {
         }
     }
 
-    fn alpha(&self) -> f32 {
-        self.accumulator / TICK_SECONDS
-    }
-
-    /// Interpolated eye position for rendering.
-    pub fn eye(&self) -> Vec3 {
-        let a = self.alpha();
+    /// Eye position for rendering, `partial` of the way from the last tick
+    /// to the current one.
+    pub fn eye(&self, partial: f32) -> Vec3 {
+        let a = partial;
         let eye = self.previous_eye_height + (self.eye_height - self.previous_eye_height) * a;
         self.previous.lerp(self.position, a) + Vec3::Y * eye
     }
 
-    /// Interpolated feet position for rendering.
-    pub fn feet(&self) -> Vec3 {
-        self.previous.lerp(self.position, self.alpha())
+    /// Feet position for rendering, between the last two ticks.
+    pub fn feet(&self, partial: f32) -> Vec3 {
+        self.previous.lerp(self.position, partial)
     }
 
-    /// How far into the swimming pose the player is, 0..1, interpolated.
-    pub fn swim_amount(&self) -> f32 {
-        self.previous_swim_amount + (self.swim_amount - self.previous_swim_amount) * self.alpha()
+    /// How far into the swimming pose the player is, 0..1, between ticks.
+    pub fn swim_amount(&self, partial: f32) -> f32 {
+        self.previous_swim_amount + (self.swim_amount - self.previous_swim_amount) * partial
     }
 
     fn aabb(&self) -> Aabb {
         Aabb::player(self.position, self.height)
     }
 
-    /// View bobbing phase and strength, interpolated.
-    pub fn bobbing(&self) -> (f32, f32) {
-        let a = self.alpha();
+    /// View bobbing phase and strength, between ticks.
+    pub fn bobbing(&self, partial: f32) -> (f32, f32) {
+        let a = partial;
         let walk = self.previous_walk_distance + (self.walk_distance - self.previous_walk_distance) * a;
         (walk, self.previous_bob + (self.bob - self.previous_bob) * a)
     }
@@ -194,20 +189,9 @@ impl PlayerController {
         self.previous = self.position;
     }
 
-    /// Runs as many ticks as `dt` covers. `world` returns None for unloaded
-    /// blocks, which are treated as solid so nobody falls out of the world.
-    pub fn update(&mut self, dt: f32, controls: Controls, yaw: f32, world: &impl Fn(IVec3) -> Option<Block>) {
-        self.accumulator += dt;
-        let mut steps = 0;
-        while self.accumulator >= TICK_SECONDS && steps < 5 {
-            self.accumulator -= TICK_SECONDS;
-            self.tick(controls, yaw, world);
-            steps += 1;
-        }
-        self.accumulator = self.accumulator.min(TICK_SECONDS);
-    }
-
-    fn tick(&mut self, controls: Controls, yaw: f32, world: &impl Fn(IVec3) -> Option<Block>) {
+    /// One game tick. `world` returns None for unloaded blocks, which are
+    /// treated as solid so nobody falls out of the world.
+    pub fn tick(&mut self, controls: Controls, yaw: f32, world: &impl Fn(IVec3) -> Option<Block>) {
         self.ticks += 1;
         self.previous = self.position;
         self.previous_eye_height = self.eye_height;

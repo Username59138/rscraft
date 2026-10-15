@@ -22,16 +22,17 @@ pub fn build_mesh(
     items: &DroppedItems,
     layers: &BlockLayers,
     seconds: f32,
+    partial: f32,
     player: Option<Vec3>,
     light: impl Fn(Vec3) -> f32,
 ) -> MeshData {
     let mut mesh = MeshData::default();
     if let Some(feet) = player {
-        for (block, position) in items.flying_to(feet) {
+        for (block, position) in items.flying_to(feet, partial) {
             mesh.push_block(block, layers, item_transform(position, seconds), light(position));
         }
     }
-    for (i, (block, position)) in items.visible().enumerate() {
+    for (i, (block, position)) in items.visible(partial).enumerate() {
         let phase = seconds + i as f32 * 1.7;
         let bob = (phase * 2.0).sin() * 0.05 + 0.1;
         mesh.push_block(block, layers, item_transform(position + Vec3::Y * bob, phase), light(position));
@@ -40,6 +41,6 @@ pub fn build_mesh(
 }
 
 /// Shadow casters for every item, like vanilla's (radius 0.15, strength 0.75).
-pub fn shadow_casters(items: &DroppedItems) -> impl Iterator<Item = Caster> + '_ {
-    items.visible().map(|(_, p)| Caster { feet: p - Vec3::Y * HALF_SIZE, radius: 0.15, strength: 0.75 })
+pub fn shadow_casters(items: &DroppedItems, partial: f32) -> impl Iterator<Item = Caster> + '_ {
+    items.visible(partial).map(|(_, p)| Caster { feet: p - Vec3::Y * HALF_SIZE, radius: 0.15, strength: 0.75 })
 }
