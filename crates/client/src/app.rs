@@ -135,6 +135,10 @@ impl ApplicationHandler for App {
         {
             match SceneRun::new(script) {
                 Ok((run, entry)) => {
+                    // Only for this run: options are saved from the options screen alone.
+                    if let Some(distance) = run.script.render_distance {
+                        state.options.render_distance = distance;
+                    }
                     state.scene = Some(run);
                     state.apply(Action::Play(entry));
                 }

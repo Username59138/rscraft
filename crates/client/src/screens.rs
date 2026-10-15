@@ -3,7 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::saves::{self, MAX_FPS_UNLIMITED, Options, WorldEntry};
+use crate::saves::{self, MAX_FPS_UNLIMITED, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, Options, WorldEntry};
 use crate::ui::{GRAY, Rect, Sprite, Ui, WHITE};
 use rscraft_world::gamemode::GameMode;
 
@@ -234,10 +234,11 @@ fn options_screen(ui: &mut Ui, options: &mut Options, from_pause: bool) -> Actio
         changed = true;
     }
 
-    let mut distance = (options.render_distance - 2) as f32 / 30.0;
+    let steps = (MAX_RENDER_DISTANCE - MIN_RENDER_DISTANCE) as f32;
+    let mut distance = (options.render_distance - MIN_RENDER_DISTANCE) as f32 / steps;
     let distance_label = format!("Render Distance: {} chunks", options.render_distance);
     if ui.slider(11, row(1.0), &distance_label, &mut distance) {
-        options.render_distance = 2 + (distance * 30.0).round() as i32;
+        options.render_distance = MIN_RENDER_DISTANCE + (distance * steps).round() as i32;
         changed = true;
     }
 

@@ -1,10 +1,18 @@
 {
-  "position": [-7.5, 90.0, 24.5],
+  "position": [
+    -7.5,
+    90.0,
+    24.5
+  ],
   "yaw": 30,
   "flying": true,
   "game_mode": "creative",
-  "keys": ["KeyW", "ControlLeft"],
+  "keys": [
+    "KeyW",
+    "ControlLeft"
+  ],
   "wait": 8,
   "benchmark": true,
-  "screenshot": "out/benchmark_fly.png"
+  "screenshot": "out/benchmark_fly.png",
+  "render_distance": 32
 }

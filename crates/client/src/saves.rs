@@ -251,6 +251,10 @@ pub fn format_date(timestamp: u64) -> String {
         .unwrap_or_default()
 }
 
+/// Render distance range in chunks; vanilla stops at 32.
+pub const MIN_RENDER_DISTANCE: i32 = 2;
+pub const MAX_RENDER_DISTANCE: i32 = 48;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Options {
@@ -284,7 +288,10 @@ impl Options {
     }
 
     pub fn load() -> Self {
-        fs::read(Self::path()).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+        let mut options: Self =
+            fs::read(Self::path()).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default();
+        options.render_distance = options.render_distance.clamp(MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE);
+        options
     }
 
     /// The frame cap, if any.

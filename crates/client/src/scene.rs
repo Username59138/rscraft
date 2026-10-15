@@ -89,6 +89,8 @@ pub struct SceneScript {
     /// Seconds to run after the world has loaded.
     pub wait: f32,
     pub screenshot: PathBuf,
+    /// Render distance in chunks; the player's own setting when left out.
+    pub render_distance: Option<i32>,
     /// Turn VSync off and log frame rate and per-stage frame times.
     pub benchmark: bool,
 }
@@ -113,6 +115,7 @@ impl Default for SceneScript {
             use_item: false,
             fill: Vec::new(),
             wait: 2.0,
+            render_distance: None,
             screenshot: PathBuf::from("scene.png"),
             benchmark: false,
         }
