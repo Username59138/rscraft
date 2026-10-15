@@ -298,7 +298,9 @@ impl PlayerController {
             let friction = if self.on_ground { BLOCK_FRICTION * 0.91 } else { 0.91 };
             let speed = if self.sprinting { WALK_SPEED * SPRINT_MULTIPLIER } else { WALK_SPEED };
             let acceleration = if self.on_ground {
-                speed * 0.216 / (friction * friction * friction)
+                // Vanilla's getFrictionInfluencedSpeed uses the block's own
+                // friction here, not the 0.91-scaled one used for slowing down.
+                speed * 0.216 / (BLOCK_FRICTION * BLOCK_FRICTION * BLOCK_FRICTION)
             } else if self.sprinting {
                 0.026
             } else {
@@ -445,5 +447,32 @@ impl PlayerController {
             }
         }
         self.position += moved;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Steady speed on flat ground, in blocks per second.
+    fn speed(sprint: bool) -> f32 {
+        let world = |p: IVec3| Some(if p.y < 0 { Block::Stone } else { Block::Air });
+        let mut player = PlayerController::new(Vec3::ZERO, false);
+        let controls = Controls { forward: 1.0, sprint, ..Default::default() };
+        for _ in 0..100 {
+            player.tick(controls, 0.0, &world);
+        }
+        let start = player.position;
+        for _ in 0..20 {
+            player.tick(controls, 0.0, &world);
+        }
+        (player.position - start).length()
+    }
+
+    #[test]
+    fn walking_and_sprinting_match_vanilla() {
+        // Vanilla: 4.317 m/s walking, 5.612 m/s sprinting.
+        assert!((speed(false) - 4.317).abs() < 0.05, "walk {}", speed(false));
+        assert!((speed(true) - 5.612).abs() < 0.05, "sprint {}", speed(true));
     }
 }

@@ -228,6 +228,9 @@ impl Session {
         let phase = walk * std::f32::consts::PI;
         let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
         self.camera.position = player.eye() + offset;
+        // Plus vanilla's small tilt: a sideways roll (3°) and a nod (5°) per step.
+        self.camera.bob_roll = (phase.sin() * bob * 3.0).to_radians();
+        self.camera.bob_pitch = ((phase - 0.2).cos() * bob * 5.0).abs().to_radians();
 
         let smoothing = (dt * 12.0).min(1.0);
         let sprint = if player.sprinting { SPRINT_FOV } else { 1.0 };

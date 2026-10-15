@@ -34,6 +34,10 @@ pub struct Camera {
     /// Rotation up/down in radians, clamped to avoid flipping.
     pub pitch: f32,
     fov_y: f32,
+    /// View bobbing tilt (radians): sideways roll and a slight nod down.
+    /// Only affects the view, not where the player is looking.
+    pub bob_roll: f32,
+    pub bob_pitch: f32,
     aspect: f32,
     near: f32,
     far: f32,
@@ -41,7 +45,7 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(aspect: f32, position: Vec3, yaw: f32, pitch: f32) -> Self {
-        Self { position, yaw, pitch, fov_y: 70f32.to_radians(), aspect, near: 0.05, far: 1000.0 }
+        Self { position, yaw, pitch, fov_y: 70f32.to_radians(), bob_roll: 0.0, bob_pitch: 0.0, aspect, near: 0.05, far: 1000.0 }
     }
 
     pub fn set_aspect(&mut self, aspect: f32) {
@@ -94,7 +98,9 @@ impl Camera {
     }
 
     pub fn view_proj(&self) -> Mat4 {
-        let view = view::look_to_mat4(self.position, self.forward(), Vec3::Y);
+        let pitch = self.pitch - self.bob_pitch;
+        let forward = Vec3::new(self.yaw.sin() * pitch.cos(), pitch.sin(), -self.yaw.cos() * pitch.cos());
+        let view = Mat4::from_rotation_z(self.bob_roll) * view::look_to_mat4(self.position, forward, Vec3::Y);
         // wgpu's clip space matches DirectX: depth 0..1, Y up.
         let proj = proj::directx::perspective(self.fov_y, self.aspect, self.near, self.far);
         proj * view
