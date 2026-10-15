@@ -70,7 +70,7 @@ impl UiRenderer {
             ],
         });
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../ui.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/ui.wgsl"));
         let pipeline_layout = gpu::pipeline_layout(device, "gui pipeline layout", &[&layout]);
         let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<UiVertex>() as u64,

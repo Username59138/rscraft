@@ -133,7 +133,7 @@ impl SkyRenderer {
         let (layout, bind_group) =
             gpu::texture_binding(device, "sky", &celestial, &celestial_sampler, wgpu::TextureViewDimension::D2Array);
 
-        let shader = crate::renderer::shader_module(device, "sky shader", include_str!("sky.wgsl"));
+        let shader = crate::renderer::shader_module(device, "sky shader", include_str!("shaders/sky.wgsl"));
         let pipeline_layout = gpu::pipeline_layout(device, "sky pipeline layout", &[globals_layout, &layout]);
         // Full-screen triangles, drawn whatever the depth.
         let pipeline = |label, fragment, blend| {

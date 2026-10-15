@@ -94,7 +94,7 @@ impl ShadowRenderer {
         let (layout, bind_group) =
             gpu::texture_binding(device, "shadow texture", &view, &sampler, wgpu::TextureViewDimension::D2);
 
-        let shader = crate::renderer::shader_module(device, "shadow shader", include_str!("shadow.wgsl"));
+        let shader = crate::renderer::shader_module(device, "shadow shader", include_str!("shaders/shadow.wgsl"));
         let pipeline_layout = gpu::pipeline_layout(device, "shadow pipeline layout", &[globals_layout, &layout]);
         let pipeline = PipelineDesc {
             buffers: &[Some(wgpu::VertexBufferLayout {

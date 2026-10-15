@@ -60,7 +60,7 @@ impl CloudRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let shader = crate::renderer::shader_module(device, "cloud shader", include_str!("clouds.wgsl"));
+        let shader = crate::renderer::shader_module(device, "cloud shader", include_str!("shaders/clouds.wgsl"));
         let layout = gpu::pipeline_layout(device, "cloud pipeline layout", &[globals_layout]);
         let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<CloudVertex>() as u64,

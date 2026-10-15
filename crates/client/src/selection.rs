@@ -64,7 +64,7 @@ impl SelectionRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let shader = crate::renderer::shader_module(device, "outline shader", include_str!("outline.wgsl"));
+        let shader = crate::renderer::shader_module(device, "outline shader", include_str!("shaders/outline.wgsl"));
         let outline_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("outline uniform"),
             size: size_of::<OutlineUniform>() as u64,

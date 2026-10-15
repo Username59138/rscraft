@@ -335,7 +335,7 @@ impl PlayerRenderer {
         let (layout, bind_group) =
             gpu::texture_binding(device, "skin", &view, &sampler, wgpu::TextureViewDimension::D2);
 
-        let shader = crate::renderer::shader_module(device, "entity shader", include_str!("entity.wgsl"));
+        let shader = crate::renderer::shader_module(device, "entity shader", include_str!("shaders/entity.wgsl"));
         let pipeline_layout = gpu::pipeline_layout(device, "entity pipeline layout", &[globals_layout, &layout]);
         let pipeline = PipelineDesc {
             buffers: &[Some(wgpu::VertexBufferLayout {
