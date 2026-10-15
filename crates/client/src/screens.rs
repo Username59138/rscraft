@@ -21,6 +21,8 @@ pub enum Screen {
     Options { from_pause: bool },
     Pause,
     Loading { progress: f32 },
+    /// The player's inventory; drawn by the game, not here.
+    Inventory,
 }
 
 pub struct SelectWorld {
@@ -58,6 +60,7 @@ pub fn draw(screen: &mut Screen, ui: &mut Ui, options: &mut Options) -> Action {
         Screen::Options { from_pause } => options_screen(ui, options, *from_pause),
         Screen::Pause => pause(ui),
         Screen::Loading { progress } => loading(ui, *progress),
+        Screen::Inventory => Action::None,
     }
 }
 

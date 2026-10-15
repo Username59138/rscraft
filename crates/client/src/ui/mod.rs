@@ -55,6 +55,7 @@ pub struct UiInput {
     pub mouse: Vec2,
     pub mouse_down: bool,
     pub clicked: bool,
+    pub right_clicked: bool,
     pub double_clicked: bool,
     pub scroll: f32,
     pub typed: String,
@@ -69,6 +70,7 @@ impl UiInput {
     /// Clears the per-frame events, keeping held state.
     pub fn end_frame(&mut self) {
         self.clicked = false;
+        self.right_clicked = false;
         self.double_clicked = false;
         self.scroll = 0.0;
         self.typed.clear();
@@ -232,6 +234,13 @@ impl Ui {
                 }
             }
         }
+    }
+
+    /// Draws part of a sprite (offset and size in source pixels) at 1:1 scale.
+    pub fn sprite_region(&mut self, sprite: Sprite, src_x: f32, src_y: f32, dst: Rect) {
+        let rect = self.atlas.sprite(sprite).rect;
+        let src = AtlasRect { x: rect.x + src_x, y: rect.y + src_y, w: dst.w, h: dst.h };
+        self.quad(dst, src, [1.0; 4]);
     }
 
     /// Fills the screen with a darkened tiled texture, like Minecraft's menus.

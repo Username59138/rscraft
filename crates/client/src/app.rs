@@ -17,7 +17,9 @@ use crate::chunks::{ChunkManager, Edits};
 use crate::debug::{self, DebugInfo};
 use crate::hud;
 use crate::input::Input;
-use crate::inventory::Inventory;
+use crate::inventory::{Inventory, ItemStack};
+use crate::inventory_screen::{self, InventoryAction};
+use crate::items::Items;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
@@ -57,6 +59,9 @@ struct Session {
     /// The player; None for the title backdrop.
     player: Option<PlayerController>,
     inventory: Inventory,
+    /// The stack held by the mouse in the inventory screen.
+    cursor: Option<ItemStack>,
+    items: Items,
     /// Block being broken and how far along it is (0..1).
     breaking: Option<(IVec3, f32)>,
     /// Delays between breaking or placing blocks while a button is held.
@@ -114,6 +119,8 @@ impl Session {
             world: None,
             player: None,
             inventory: Inventory::default(),
+            cursor: None,
+            items: Items::default(),
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
@@ -142,6 +149,8 @@ impl Session {
             world: Some(entry),
             player: Some(player),
             inventory,
+            cursor: None,
+            items: Items::default(),
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
@@ -230,7 +239,7 @@ impl Session {
                 if progress >= 1.0 {
                     self.chunks.set_block(hit.block, Block::Air);
                     if let Some(item) = target.drop() {
-                        self.inventory.add(item, 1);
+                        self.items.spawn_at_block(hit.block, item, 1);
                     }
                     self.breaking = None;
                     // Vanilla waits 5 ticks before starting on the next block.
@@ -257,6 +266,27 @@ impl Session {
             }
         }
         Some((hit, self.breaking.map_or(0.0, |(_, p)| p)))
+    }
+
+    /// Drops one of the selected item, or the whole stack with Ctrl (Q).
+    fn throw_selected(&mut self, whole_stack: bool) {
+        let Some(player) = &self.player else { return };
+        let Some(stack) = self.inventory.selected_stack() else { return };
+        let count = if whole_stack { stack.count } else { 1 };
+        for _ in 0..count {
+            self.inventory.take_selected();
+        }
+        self.items.throw(player.eye(), self.camera.forward(), stack.block, count);
+    }
+
+    /// Puts the stack held by the mouse back, dropping what doesn't fit.
+    fn return_cursor(&mut self) {
+        if let Some(stack) = self.cursor.take() {
+            let left = self.inventory.add(stack.block, stack.count);
+            if left > 0 && let Some(player) = &self.player {
+                self.items.throw(player.eye(), self.camera.forward(), stack.block, left);
+            }
+        }
     }
 
     /// Mouse wheel while zooming: positive notches zoom in.
@@ -402,6 +432,9 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state: button_state, button: MouseButton::Right, .. } => {
                 let pressed = button_state == ElementState::Pressed;
                 state.input.use_item = pressed && state.playing() && state.mouse_grabbed;
+                if pressed && !state.playing() {
+                    state.ui.input.right_clicked = true;
+                }
                 if pressed {
                     // A fresh click places right away; holding repeats.
                     state.session.place_cooldown = 0.0;
@@ -487,6 +520,11 @@ impl State {
                 KeyCode::Escape => self.open(Screen::Pause),
                 KeyCode::F3 => self.show_debug = !self.show_debug,
                 KeyCode::F5 => self.perspective = self.perspective.next(),
+                KeyCode::KeyE => self.open(Screen::Inventory),
+                KeyCode::KeyQ => {
+                    let whole = self.input.is_pressed(KeyCode::ControlLeft);
+                    self.session.throw_selected(whole);
+                }
                 KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5
                 | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
                     self.session.inventory.selected = code as usize - KeyCode::Digit1 as usize;
@@ -554,6 +592,13 @@ impl State {
         };
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
+        // Items keep falling while menus are open, but are only picked up in play.
+        if self.in_world() {
+            let session = &mut self.session;
+            let feet = session.player.as_ref().filter(|_| matches!(self.screen, Screen::None)).map(PlayerController::feet);
+            let chunks = &session.chunks;
+            session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
+        }
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
             if *progress >= 1.0 {
@@ -594,6 +639,14 @@ impl State {
             };
             debug::draw(&mut self.ui, &info);
         }
+        if matches!(self.screen, Screen::Inventory) {
+            let shift = self.input.is_pressed(KeyCode::ShiftLeft) || self.input.is_pressed(KeyCode::ShiftRight);
+            let session = &mut self.session;
+            if let InventoryAction::Close = inventory_screen::draw(&mut self.ui, &mut session.inventory, &mut session.cursor, shift) {
+                session.return_cursor();
+                self.open(Screen::None);
+            }
+        }
         let action = screens::draw(&mut self.screen, &mut self.ui, &mut self.options);
         self.apply(action);
 
@@ -618,6 +671,7 @@ impl State {
                     crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
                 })
                 .as_ref(),
+            &self.session.items.build_mesh(&self.layers, seconds),
             &self.ui.vertices,
             [self.ui.width, self.ui.height],
         );

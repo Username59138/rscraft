@@ -30,10 +30,11 @@ pub enum Sprite {
     Crosshair,
     Hotbar,
     HotbarSelection,
+    InventoryScreen,
 }
 
 impl Sprite {
-    const ALL: [Sprite; 17] = [
+    const ALL: [Sprite; 18] = [
         Sprite::White,
         Sprite::Button,
         Sprite::ButtonHighlighted,
@@ -51,6 +52,7 @@ impl Sprite {
         Sprite::Crosshair,
         Sprite::Hotbar,
         Sprite::HotbarSelection,
+        Sprite::InventoryScreen,
     ];
 
     /// Path under `assets/minecraft/textures/`.
@@ -73,6 +75,7 @@ impl Sprite {
             Sprite::Crosshair => "gui/sprites/hud/crosshair",
             Sprite::Hotbar => "gui/sprites/hud/hotbar",
             Sprite::HotbarSelection => "gui/sprites/hud/hotbar_selection",
+            Sprite::InventoryScreen => "gui/container/inventory",
         })
     }
 }

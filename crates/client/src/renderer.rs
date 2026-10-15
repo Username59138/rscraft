@@ -364,11 +364,13 @@ impl Renderer {
         player: Option<&[EntityVertex]>,
         hand: Option<&[EntityVertex]>,
         selection: Option<&Selection>,
+        items: &MeshData,
         ui: &[UiVertex],
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
         self.selection.prepare(&self.device, &self.queue, selection);
+        let items = GpuMesh::upload(&self.device, items);
         self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
 
@@ -439,6 +441,9 @@ impl Renderer {
             pass.set_pipeline(&self.solid_pipeline);
             for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
                 mesh.draw(&mut pass);
+            }
+            if let Some(items) = &items {
+                items.draw(&mut pass);
             }
             self.player.draw_body(&mut pass);
             self.clouds.draw(&mut pass);

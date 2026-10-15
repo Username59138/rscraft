@@ -6,6 +6,8 @@ mod debug;
 mod frustum;
 mod hud;
 mod inventory;
+mod inventory_screen;
+mod items;
 mod input;
 mod mesh;
 mod movement;
