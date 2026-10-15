@@ -13,6 +13,7 @@ use winit::window::Window;
 use crate::camera::Camera;
 use crate::clouds::CloudRenderer;
 use crate::frustum::Frustum;
+use crate::gpu::{self, Depth, PipelineDesc};
 use crate::mesh::{MeshData, SectionMesh, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
 use crate::selection::{Selection, SelectionRenderer};
@@ -247,16 +248,7 @@ impl Renderer {
         });
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[gpu::uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
         });
         let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals bind group"),
@@ -278,43 +270,17 @@ impl Renderer {
 
         // Block textures.
         let block_textures = BlockTextures::new(&device, &queue, images);
-        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("block texture layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("block texture bind group"),
-            layout: &texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&block_textures.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&block_textures.sampler) },
-            ],
-        });
+        let (texture_layout, texture_bind_group) = gpu::texture_binding(
+            &device,
+            "block textures",
+            &block_textures.view,
+            &block_textures.sampler,
+            wgpu::TextureViewDimension::D2Array,
+        );
 
         // Pipelines.
         let shader = shader_module(&device, "block shader", include_str!("blocks.wgsl"));
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("block pipeline layout"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout)],
-            ..Default::default()
-        });
+        let layout = gpu::pipeline_layout(&device, "block pipeline layout", &[&globals_layout, &texture_layout]);
         // Block cracks multiply the colour underneath by twice their own, like
         // vanilla, so mid-grey leaves it unchanged and darker pixels darken it.
         let multiply = wgpu::BlendState {
@@ -325,44 +291,23 @@ impl Renderer {
             },
             alpha: wgpu::BlendComponent::OVER,
         };
+        let buffers = [Some(Vertex::layout())];
         let pipeline = |label, vertex, fragment, blend, translucent: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vertex),
-                    buffers: &[Some(Vertex::layout())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fragment),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    front_face: wgpu::FrontFace::Ccw,
-                    // Water must be visible from below too.
-                    cull_mode: if translucent { None } else { Some(wgpu::Face::Back) },
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
+            PipelineDesc {
+                vertex,
+                fragment,
+                buffers: &buffers,
+                blend,
+                // Water must be visible from below too.
+                cull: if translucent { None } else { Some(wgpu::Face::Back) },
+                depth: Some(Depth {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(!translucent),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
+                    write: !translucent,
+                    compare: wgpu::CompareFunction::LessEqual,
                 }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+                ..PipelineDesc::new(label, &layout, &shader, config.format)
+            }
+            .build(&device)
         };
         let solid_pipeline = pipeline("solid pipeline", "vs_main", "fs_solid", wgpu::BlendState::REPLACE, false);
         let item_pipeline = pipeline("item pipeline", "vs_item", "fs_solid", wgpu::BlendState::REPLACE, false);

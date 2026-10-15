@@ -5,6 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, Vec3};
 use rscraft_assets::RgbaImage;
 
+use crate::gpu::{self, Depth, PipelineDesc};
 use crate::sky::CLOUD_HEIGHT;
 
 /// Size of one cloud cell in blocks.
@@ -60,58 +61,31 @@ impl CloudRenderer {
         depth_format: wgpu::TextureFormat,
     ) -> Self {
         let shader = crate::renderer::shader_module(device, "cloud shader", include_str!("clouds.wgsl"));
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cloud pipeline layout"),
-            bind_group_layouts: &[Some(globals_layout)],
-            ..Default::default()
-        });
+        let layout = gpu::pipeline_layout(device, "cloud pipeline layout", &[globals_layout]);
+        let buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: size_of::<CloudVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32],
+        })];
         // Like vanilla: a depth-only pass first, so the translucent colour
         // pass only shows the nearest cloud surface.
-        let pipeline = |depth_only: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(if depth_only { "cloud depth pipeline" } else { "cloud pipeline" }),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: size_of::<CloudVertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32],
-                    })],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: if depth_only { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL },
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: depth_format,
-                    depth_write_enabled: Some(depth_only),
-                    depth_compare: Some(if depth_only {
-                        wgpu::CompareFunction::Less
-                    } else {
-                        wgpu::CompareFunction::LessEqual
-                    }),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let depth_pipeline = PipelineDesc {
+            buffers: &buffers,
+            write_mask: wgpu::ColorWrites::empty(),
+            depth: Some(Depth::opaque(depth_format)),
+            ..PipelineDesc::new("cloud depth pipeline", &layout, &shader, color_format)
+        }
+        .build(device);
+        let color_pipeline = PipelineDesc {
+            buffers: &buffers,
+            depth: Some(Depth::read_only(depth_format, wgpu::CompareFunction::LessEqual)),
+            ..PipelineDesc::new("cloud pipeline", &layout, &shader, color_format)
+        }
+        .build(device);
         Self {
             map: CloudMap::new(image),
-            depth_pipeline: pipeline(true),
-            color_pipeline: pipeline(false),
+            depth_pipeline,
+            color_pipeline,
             vertex_buffer: None,
             vertex_count: 0,
             built_for: None,

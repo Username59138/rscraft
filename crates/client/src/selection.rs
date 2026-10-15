@@ -5,6 +5,7 @@ use glam::{IVec3, Vec3};
 use rscraft_world::Face;
 use wgpu::util::DeviceExt;
 
+use crate::gpu::{self, Depth, PipelineDesc};
 use crate::mesh::MeshData;
 
 /// Outlines and cracks sit this far outside the block to avoid z-fighting.
@@ -72,62 +73,26 @@ impl SelectionRenderer {
         });
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("outline layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[gpu::uniform_entry(0, wgpu::ShaderStages::VERTEX)],
         });
         let outline_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("outline bind group"),
             layout: &uniform_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: outline_uniform.as_entire_binding() }],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("outline pipeline layout"),
-            bind_group_layouts: &[Some(globals_layout), Some(&uniform_layout)],
-            ..Default::default()
-        });
-        let outline_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("outline pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<OutlineVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32],
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: depth_format,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let layout = gpu::pipeline_layout(device, "outline pipeline layout", &[globals_layout, &uniform_layout]);
+        let outline_pipeline = PipelineDesc {
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<OutlineVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32],
+            })],
+            // The edge quads face either way.
+            cull: None,
+            depth: Some(Depth::read_only(depth_format, wgpu::CompareFunction::LessEqual)),
+            ..PipelineDesc::new("outline pipeline", &layout, &shader, color_format)
+        }
+        .build(device);
         let outline_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("outline vertices"),
             size: (OUTLINE_VERTICES as usize * size_of::<OutlineVertex>()) as u64,

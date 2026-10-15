@@ -5,6 +5,8 @@ use std::f32::consts::TAU;
 use glam::Vec3;
 use rscraft_assets::{ClientJar, RgbaImage};
 
+use crate::gpu::{self, Depth, PipelineDesc};
+
 /// A full day lasts 20 minutes, like in Minecraft.
 const DAY_SECONDS: f32 = 1200.0;
 pub const CLOUD_HEIGHT: f32 = 192.33;
@@ -128,73 +130,22 @@ impl SkyRenderer {
         let celestial_sampler =
             device.create_sampler(&wgpu::SamplerDescriptor { label: Some("celestial sampler"), ..Default::default() });
 
-        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2Array,
-                multisampled: false,
-            },
-            count: None,
-        };
-        let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sky layout"),
-            entries: &[texture_entry(0), sampler_entry(1)],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sky bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&celestial) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&celestial_sampler) },
-            ],
-        });
+        let (layout, bind_group) =
+            gpu::texture_binding(device, "sky", &celestial, &celestial_sampler, wgpu::TextureViewDimension::D2Array);
 
         let shader = crate::renderer::shader_module(device, "sky shader", include_str!("sky.wgsl"));
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sky pipeline layout"),
-            bind_group_layouts: &[Some(globals_layout), Some(&layout)],
-            ..Default::default()
-        });
+        let pipeline_layout = gpu::pipeline_layout(device, "sky pipeline layout", &[globals_layout, &layout]);
+        // Full-screen triangles, drawn whatever the depth.
         let pipeline = |label, fragment, blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_sky"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fragment),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: depth_format,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            PipelineDesc {
+                vertex: "vs_sky",
+                fragment,
+                blend,
+                cull: None,
+                depth: Some(Depth::read_only(depth_format, wgpu::CompareFunction::Always)),
+                ..PipelineDesc::new(label, &pipeline_layout, &shader, color_format)
+            }
+            .build(device)
         };
 
         Self {

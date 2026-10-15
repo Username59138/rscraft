@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use super::{GuiAtlas, UiVertex};
+use crate::gpu::{self, PipelineDesc};
 use crate::renderer::GuiFrame;
 
 #[repr(C)]
@@ -54,32 +55,9 @@ impl UiRenderer {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gui layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu::uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu::texture_entry(1, wgpu::TextureViewDimension::D2),
+                gpu::sampler_entry(2),
             ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -93,41 +71,20 @@ impl UiRenderer {
         });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("../ui.wgsl"));
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gui pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            ..Default::default()
-        });
+        let pipeline_layout = gpu::pipeline_layout(device, "gui pipeline layout", &[&layout]);
+        let buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: size_of::<UiVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+        })];
         let pipeline = |label, blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: size_of::<UiVertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
-                    })],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            PipelineDesc {
+                buffers: &buffers,
+                blend,
+                cull: None,
+                ..PipelineDesc::new(label, &pipeline_layout, &shader, format)
+            }
+            .build(device)
         };
 
         // The crosshair inverts what's behind it, like vanilla's

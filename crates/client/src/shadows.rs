@@ -7,6 +7,8 @@ use rscraft_assets::RgbaImage;
 use rscraft_world::Block;
 use wgpu::util::DeviceExt;
 
+use crate::gpu::{self, Depth, PipelineDesc};
+
 /// How far below an entity its shadow still shows.
 const MAX_HEIGHT: f32 = 2.0;
 /// Shadows sit this far above the block to avoid z-fighting.
@@ -85,97 +87,25 @@ impl ShadowRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let size = wgpu::Extent3d { width: texture.width, height: texture.height, depth_or_array_layers: 1 };
-        let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            gpu_texture.as_image_copy(),
-            &texture.pixels,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * texture.width), rows_per_image: None },
-            size,
-        );
-        let view = gpu_texture.create_view(&Default::default());
+        let view = gpu::upload_texture(device, queue, "shadow texture", texture.width, texture.height, &texture.pixels)
+            .create_view(&Default::default());
         let sampler =
             device.create_sampler(&wgpu::SamplerDescriptor { label: Some("shadow sampler"), ..Default::default() });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("shadow layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("shadow bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-            ],
-        });
+        let (layout, bind_group) =
+            gpu::texture_binding(device, "shadow texture", &view, &sampler, wgpu::TextureViewDimension::D2);
 
         let shader = crate::renderer::shader_module(device, "shadow shader", include_str!("shadow.wgsl"));
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("shadow pipeline layout"),
-            bind_group_layouts: &[Some(globals_layout), Some(&layout)],
-            ..Default::default()
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<ShadowVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32],
-                })],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: depth_format,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_layout = gpu::pipeline_layout(device, "shadow pipeline layout", &[globals_layout, &layout]);
+        let pipeline = PipelineDesc {
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<ShadowVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32],
+            })],
+            depth: Some(Depth::read_only(depth_format, wgpu::CompareFunction::LessEqual)),
+            ..PipelineDesc::new("shadow pipeline", &pipeline_layout, &shader, color_format)
+        }
+        .build(device);
         Self { pipeline, bind_group, buffer: None }
     }
 
