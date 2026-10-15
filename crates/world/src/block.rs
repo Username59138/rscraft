@@ -11,7 +11,9 @@ pub enum Block {
     Sand,
     Gravel,
     Bedrock,
-    Water,
+    /// Water with vanilla's `level` block state: 0 is a source, 1..=7 flow
+    /// away from one (7 is the thinnest), 8..=15 are falling.
+    Water(u8),
     OakLog,
     OakLeaves,
     OakPlanks,
@@ -81,6 +83,9 @@ impl FaceTexture {
 }
 
 impl Block {
+    /// A water source block.
+    pub const WATER: Block = Block::Water(0);
+
     pub const ALL: [Block; 12] = [
         Block::Air,
         Block::Stone,
@@ -89,7 +94,7 @@ impl Block {
         Block::Sand,
         Block::Gravel,
         Block::Bedrock,
-        Block::Water,
+        Block::WATER,
         Block::OakLog,
         Block::OakLeaves,
         Block::OakPlanks,
@@ -98,23 +103,63 @@ impl Block {
 
     /// Full opaque cube that hides the faces of its neighbours.
     pub fn is_opaque(self) -> bool {
-        !matches!(self, Block::Air | Block::Water | Block::OakLeaves)
+        !matches!(self, Block::Air | Block::Water(_) | Block::OakLeaves)
     }
 
-    /// The block with this numeric id (its index in `ALL`).
+    /// Numeric id of the block type, its index in `ALL`; block state such
+    /// as the water level is not part of it.
+    pub fn index(self) -> usize {
+        match self {
+            Block::Air => 0,
+            Block::Stone => 1,
+            Block::Dirt => 2,
+            Block::Grass => 3,
+            Block::Sand => 4,
+            Block::Gravel => 5,
+            Block::Bedrock => 6,
+            Block::Water(_) => 7,
+            Block::OakLog => 8,
+            Block::OakLeaves => 9,
+            Block::OakPlanks => 10,
+            Block::CraftingTable => 11,
+        }
+    }
+
+    /// The block type with this numeric id, in its default state.
     pub fn from_id(id: u8) -> Option<Block> {
         Block::ALL.get(id as usize).copied()
     }
 
+    /// Block state beyond the type, 0 for blocks without any.
+    pub fn state(self) -> u8 {
+        match self {
+            Block::Water(level) => level,
+            _ => 0,
+        }
+    }
+
+    /// The block with this id and state, as stored by `index` and `state`.
+    pub fn from_id_and_state(id: u8, state: u8) -> Option<Block> {
+        match Block::from_id(id)? {
+            Block::Water(_) if state < 16 => Some(Block::Water(state)),
+            _ if state != 0 => None,
+            block => Some(block),
+        }
+    }
+
+    pub fn is_water(self) -> bool {
+        matches!(self, Block::Water(_))
+    }
+
     /// Whether the crosshair can select this block.
     pub fn is_targetable(self) -> bool {
-        !matches!(self, Block::Air | Block::Water)
+        !matches!(self, Block::Air | Block::Water(_))
     }
 
     /// Vanilla hardness; None means it can't be broken.
     pub fn hardness(self) -> Option<f32> {
         match self {
-            Block::Air | Block::Water | Block::Bedrock => None,
+            Block::Air | Block::Water(_) | Block::Bedrock => None,
             Block::Stone => Some(1.5),
             Block::Dirt | Block::Sand => Some(0.5),
             Block::Grass | Block::Gravel => Some(0.6),
@@ -135,7 +180,7 @@ impl Block {
     pub fn drop(self) -> Option<Block> {
         match self {
             Block::Grass => Some(Block::Dirt),
-            Block::Air | Block::Water | Block::Bedrock | Block::OakLeaves => None,
+            Block::Air | Block::Water(_) | Block::Bedrock | Block::OakLeaves => None,
             other => Some(other),
         }
     }
@@ -150,7 +195,7 @@ impl Block {
             Block::Sand => "sand",
             Block::Gravel => "gravel",
             Block::Bedrock => "bedrock",
-            Block::Water => "water",
+            Block::Water(_) => "water",
             Block::OakLog => "oak_log",
             Block::OakLeaves => "oak_leaves",
             Block::OakPlanks => "oak_planks",
@@ -174,7 +219,7 @@ impl Block {
             Block::Sand => "Sand",
             Block::Gravel => "Gravel",
             Block::Bedrock => "Bedrock",
-            Block::Water => "Water",
+            Block::Water(_) => "Water",
             Block::OakLog => "Oak Log",
             Block::OakLeaves => "Oak Leaves",
             Block::OakPlanks => "Oak Planks",
@@ -184,14 +229,14 @@ impl Block {
 
     /// Whether entities collide with this block.
     pub fn is_solid(self) -> bool {
-        !matches!(self, Block::Air | Block::Water)
+        !matches!(self, Block::Air | Block::Water(_))
     }
 
     /// How much sky light this block absorbs: 0 = transparent, 15 = opaque.
     pub fn light_opacity(self) -> u8 {
         match self {
             Block::Air => 0,
-            Block::Water | Block::OakLeaves => 1,
+            Block::Water(_) | Block::OakLeaves => 1,
             _ => 15,
         }
     }
@@ -199,7 +244,7 @@ impl Block {
     pub fn render_layer(self) -> Option<RenderLayer> {
         match self {
             Block::Air => None,
-            Block::Water => Some(RenderLayer::Translucent),
+            Block::Water(_) => Some(RenderLayer::Translucent),
             _ => Some(RenderLayer::Solid),
         }
     }
@@ -208,7 +253,7 @@ impl Block {
     pub fn face_visible(self, neighbor: Block) -> bool {
         match self {
             Block::Air => false,
-            Block::Water => neighbor != Block::Water && !neighbor.is_opaque(),
+            Block::Water(_) => !neighbor.is_water() && !neighbor.is_opaque(),
             _ => !neighbor.is_opaque(),
         }
     }
@@ -229,7 +274,7 @@ impl Block {
             Block::Sand => FaceTexture::plain("sand"),
             Block::Gravel => FaceTexture::plain("gravel"),
             Block::Bedrock => FaceTexture::plain("bedrock"),
-            Block::Water => FaceTexture::tinted("water_still", Tint::Water),
+            Block::Water(_) => FaceTexture::tinted("water_still", Tint::Water),
             Block::OakLog => match face {
                 Face::Up | Face::Down => FaceTexture::plain("oak_log_top"),
                 _ => FaceTexture::plain("oak_log"),

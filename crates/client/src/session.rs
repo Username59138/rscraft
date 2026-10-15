@@ -207,6 +207,8 @@ impl Session {
             tick_time: 0.0,
             underwater_seconds: 0.0,
         };
+        let fluid_ticks = session.world.as_ref().map(|w| w.save.fluid_ticks.clone()).unwrap_or_default();
+        session.chunks.schedule_fluid_ticks(fluid_ticks.into_iter().map(IVec3::from));
         session.apply_game_mode();
         session
     }
@@ -229,6 +231,7 @@ impl Session {
         world.save.time_of_day = self.day.time;
         world.save.game_mode = self.game_mode;
         world.save.previous_game_mode = self.previous_game_mode;
+        world.save.fluid_ticks = self.chunks.pending_fluid_ticks().iter().map(IVec3::to_array).collect();
         world.save.last_played = saves::now();
         match world.write() {
             Ok(()) => log::info!("saved world {}", world.save.name),
@@ -236,7 +239,6 @@ impl Session {
         }
     }
 
-    /// Advances the player one frame and moves the camera to their eyes.
     /// How far the current frame is between the last tick and the next.
     pub fn partial(&self) -> f32 {
         self.tick_time / TICK_SECONDS
@@ -255,9 +257,10 @@ impl Session {
         self.tick_time = self.tick_time.min(TICK_SECONDS);
     }
 
-    /// One game tick: the player moves, dropped items fall and get picked
-    /// up, splashes and particles play.
+    /// One game tick: water flows, the player moves, dropped items fall and
+    /// get picked up, splashes and particles play.
     fn tick(&mut self, controls: Controls) {
+        self.chunks.tick();
         let chunks = &self.chunks;
         let world = |pos| chunks.block_at(pos);
         if let Some(player) = &mut self.player {
@@ -409,7 +412,7 @@ impl Session {
 
         if use_item && mode.may_build() && self.place_cooldown == 0.0 && hit.normal != IVec3::ZERO {
             let pos = hit.block + hit.normal;
-            let free = matches!(self.chunks.block_at(pos), Some(Block::Air | Block::Water));
+            let free = matches!(self.chunks.block_at(pos), Some(Block::Air | Block::Water(_)));
             let blocked = self.player.as_ref().is_some_and(|p| p.intersects_block(pos));
             if free
                 && !blocked
@@ -484,8 +487,11 @@ impl Session {
     pub fn underwater(&mut self, camera: &Camera, dt: f32) -> Option<Underwater> {
         let eye = camera.position;
         let block = eye.floor().as_ivec3();
-        let in_water = self.chunks.block_at(block) == Some(Block::Water)
-            && (self.chunks.block_at(block + IVec3::Y) == Some(Block::Water) || eye.y.fract() < 8.0 / 9.0);
+        let in_water = self.chunks.block_at(block).is_some_and(|b| {
+            b.is_water()
+                && (self.chunks.block_at(block + IVec3::Y).is_some_and(Block::is_water)
+                    || eye.y.fract() < rscraft_world::fluid::own_height(b))
+        });
         if !in_water || self.world.is_none() {
             self.underwater_seconds = 0.0;
             return None;

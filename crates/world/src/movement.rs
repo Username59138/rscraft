@@ -12,8 +12,6 @@ const SNEAK_EYE_HEIGHT: f32 = 1.27;
 /// Swimming players are 0.6 tall with their eyes at 0.4, like vanilla.
 const SWIM_HEIGHT: f32 = 0.6;
 const SWIM_EYE_HEIGHT: f32 = 0.4;
-/// Height of a still water surface within its block.
-const WATER_SURFACE: f32 = 8.0 / 9.0;
 
 const GRAVITY: f32 = 0.08;
 const AIR_DRAG: f32 = 0.98;
@@ -218,7 +216,7 @@ impl PlayerController {
         }
         self.sneaking = controls.sneak && !self.flying && !self.swimming;
         self.sprinting = controls.sprint && controls.forward > 0.0 && !self.sneaking;
-        self.in_water = world((self.position + Vec3::Y * 0.4).floor().as_ivec3()) == Some(Block::Water);
+        self.in_water = world((self.position + Vec3::Y * 0.4).floor().as_ivec3()).is_some_and(Block::is_water);
         self.update_swimming(world);
         let target_eye = if self.swimming {
             SWIM_EYE_HEIGHT
@@ -265,7 +263,7 @@ impl PlayerController {
                 let d = controls.look_y;
                 let rate = if d < -0.2 { 0.085 } else { 0.06 };
                 let head = self.position + Vec3::Y * (1.0 - 0.1);
-                if d <= 0.0 || controls.jump || world(head.floor().as_ivec3()) == Some(Block::Water) {
+                if d <= 0.0 || controls.jump || world(head.floor().as_ivec3()).is_some_and(Block::is_water) {
                     self.velocity.y += (d - self.velocity.y) * rate;
                 }
             }
@@ -333,7 +331,7 @@ impl PlayerController {
     /// up again once there is room.
     fn update_swimming(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         let eye = self.position + Vec3::Y * self.eye_height;
-        let eye_in_water = world(eye.floor().as_ivec3()) == Some(Block::Water);
+        let eye_in_water = world(eye.floor().as_ivec3()).is_some_and(Block::is_water);
         let want = if self.noclip {
             false
         } else if self.swimming {
@@ -355,15 +353,16 @@ impl PlayerController {
         let base = self.position.floor().as_ivec3();
         (0..3)
             .map(|dy| base + IVec3::Y * dy)
-            .take_while(|&pos| world(pos) == Some(Block::Water))
+            .take_while(|&pos| world(pos).is_some_and(Block::is_water))
             .last()
-            .map(|pos| pos.y as f32 + WATER_SURFACE)
+            .map(|pos| pos.y as f32 + world(pos).map_or(0.0, crate::fluid::own_height))
     }
 
     fn touches_water(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {
         let (min, max) = (aabb.min.floor().as_ivec3(), (aabb.max - 1e-4).floor().as_ivec3());
-        (min.y..=max.y)
-            .any(|y| (min.z..=max.z).any(|z| (min.x..=max.x).any(|x| world(IVec3::new(x, y, z)) == Some(Block::Water))))
+        (min.y..=max.y).any(|y| {
+            (min.z..=max.z).any(|z| (min.x..=max.x).any(|x| world(IVec3::new(x, y, z)).is_some_and(Block::is_water)))
+        })
     }
 
     fn collides(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {

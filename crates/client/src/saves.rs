@@ -62,7 +62,7 @@ impl PlayerSave {
             .slots
             .iter()
             .enumerate()
-            .filter_map(|(slot, s)| s.map(|s| SlotSave { slot, block: s.block as u8, count: s.count }))
+            .filter_map(|(slot, s)| s.map(|s| SlotSave { slot, block: s.block.index() as u8, count: s.count }))
             .collect();
     }
 }
@@ -81,6 +81,9 @@ pub struct WorldSave {
     /// What F3+F4 offers first.
     #[serde(default)]
     pub previous_game_mode: Option<GameMode>,
+    /// Water blocks that were about to update when the world was saved.
+    #[serde(default)]
+    pub fluid_ticks: Vec<[i32; 3]>,
 }
 
 impl WorldSave {
@@ -108,7 +111,7 @@ impl WorldEntry {
     }
 
     /// Player block edits, stored as a small binary file: per column its
-    /// coordinates and edit count, then (x, y, z, block id) per edit.
+    /// coordinates and edit count, then (x, y, z, block id, block state) per edit.
     pub fn write_edits(&self, edits: &Edits) -> Result<()> {
         let mut out = Vec::from(*EDITS_MAGIC);
         out.extend_from_slice(&(edits.len() as u32).to_le_bytes());
@@ -121,7 +124,7 @@ impl WorldEntry {
                 for v in [pos.x, pos.y, pos.z] {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
-                out.push(*block as u8);
+                out.extend_from_slice(&[block.index() as u8, block.state()]);
             }
         }
         fs::write(self.folder.join("edits.bin"), out).context("saving block edits")
@@ -140,7 +143,9 @@ impl WorldEntry {
     }
 }
 
-const EDITS_MAGIC: &[u8; 4] = b"RSE1";
+const EDITS_MAGIC: &[u8; 4] = b"RSE2";
+/// The first format, before blocks had states.
+const EDITS_MAGIC_V1: &[u8; 4] = b"RSE1";
 
 /// Reads little-endian values from the front of a byte slice.
 struct Reader<'a>(&'a [u8]);
@@ -160,14 +165,19 @@ impl Reader<'_> {
 }
 
 fn parse_edits(data: &[u8]) -> Option<Edits> {
-    let mut reader = Reader(data.strip_prefix(EDITS_MAGIC)?);
+    let (mut reader, has_state) = match data.strip_prefix(EDITS_MAGIC) {
+        Some(rest) => (Reader(rest), true),
+        None => (Reader(data.strip_prefix(EDITS_MAGIC_V1)?), false),
+    };
     let mut edits = Edits::new();
     for _ in 0..reader.i32()? {
         let column = IVec2::new(reader.i32()?, reader.i32()?);
         let blocks: &mut HashMap<IVec3, Block> = edits.entry(column).or_default();
         for _ in 0..reader.i32()? {
             let pos = IVec3::new(reader.i32()?, reader.i32()?, reader.i32()?);
-            blocks.insert(pos, Block::from_id(reader.u8()?)?);
+            let id = reader.u8()?;
+            let state = if has_state { reader.u8()? } else { 0 };
+            blocks.insert(pos, Block::from_id_and_state(id, state)?);
         }
     }
     Some(edits)
@@ -226,6 +236,7 @@ pub fn create_world_at(folder: PathBuf, name: &str, seed_text: &str, game_mode: 
             player: None,
             game_mode,
             previous_game_mode: None,
+            fluid_ticks: Vec::new(),
         },
     };
     entry.write()?;
@@ -305,5 +316,28 @@ impl Options {
         if let Err(err) = result {
             log::warn!("saving options: {err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edit_bytes(magic: &[u8; 4], block: &[u8]) -> Vec<u8> {
+        let mut data = Vec::from(*magic);
+        for v in [1, 0, 0, 1, 3, 70, 5] {
+            data.extend_from_slice(&i32::to_le_bytes(v));
+        }
+        data.extend_from_slice(block);
+        data
+    }
+
+    #[test]
+    fn reads_edits_with_and_without_block_states() {
+        let pos = IVec3::new(3, 70, 5);
+        let old = parse_edits(&edit_bytes(EDITS_MAGIC_V1, &[Block::WATER.index() as u8])).unwrap();
+        assert_eq!(old[&IVec2::ZERO][&pos], Block::WATER);
+        let new = parse_edits(&edit_bytes(EDITS_MAGIC, &[Block::WATER.index() as u8, 3])).unwrap();
+        assert_eq!(new[&IVec2::ZERO][&pos], Block::Water(3));
     }
 }

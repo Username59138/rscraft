@@ -210,7 +210,7 @@ impl Particles {
             for _ in 0..AMBIENT_SAMPLES {
                 let offset = Vec3::new(self.rng.signed(), self.rng.signed(), self.rng.signed()) * range;
                 let pos = origin + offset.as_ivec3();
-                if self.rng.next() < 0.1 && world(pos) == Some(Block::Water) {
+                if self.rng.next() < 0.1 && world(pos).is_some_and(Block::is_water) {
                     let at = pos.as_vec3() + Vec3::new(self.rng.next(), self.rng.next(), self.rng.next());
                     let (size, lifetime) = (self.rng.next() * 0.6 + 0.2, (16.0 / (self.rng.next() * 0.8 + 0.2)) as u32);
                     let particle = self.spawn(Kind::Suspended, layers.underwater, at, Vec3::ZERO);
@@ -267,7 +267,7 @@ impl Particle {
     fn tick(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         self.previous = self.position;
         self.age += 1;
-        let in_water = world(self.position.floor().as_ivec3()) == Some(Block::Water);
+        let in_water = world(self.position.floor().as_ivec3()).is_some_and(Block::is_water);
         match self.kind {
             Kind::Terrain => self.velocity.y -= 0.04,
             Kind::Splash => self.velocity.y -= 0.06,

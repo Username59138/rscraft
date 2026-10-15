@@ -4,6 +4,7 @@
 pub mod block;
 pub mod crafting;
 pub mod dropped_items;
+pub mod fluid;
 pub mod gamemode;
 pub mod generator;
 pub mod inventory;

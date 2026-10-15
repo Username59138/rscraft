@@ -108,7 +108,7 @@ impl Generator {
                     let block = if y <= bedrock_top {
                         Block::Bedrock
                     } else if y > height {
-                        Block::Water
+                        Block::WATER
                     } else if y == height {
                         top
                     } else if y > height - 4 {

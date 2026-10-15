@@ -44,7 +44,7 @@ impl BlockLayers {
 
     #[inline]
     pub fn get(&self, block: Block, face: Face) -> u32 {
-        self.table[block as usize][face as usize]
+        self.table[block.index()][face as usize]
     }
 }
 
@@ -91,7 +91,7 @@ impl BlockImages {
         for block in Block::ALL.into_iter().filter(|&b| b != Block::Air) {
             for face in Face::ALL {
                 let texture = block.texture(face);
-                table[block as usize][face as usize] = *by_texture.entry(texture).or_insert_with(|| {
+                table[block.index()][face as usize] = *by_texture.entry(texture).or_insert_with(|| {
                     let (frames, frametime) = jar.as_deref_mut().map_or_else(
                         || (vec![missing_texture()], 1),
                         |jar| {

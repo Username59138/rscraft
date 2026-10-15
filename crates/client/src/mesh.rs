@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, Mat4, Vec3};
-use rscraft_world::{Block, ColumnGroup, Face, LightRegion, MAX_LIGHT, RenderLayer, SECTION_SIZE, Section};
+use rscraft_world::{Block, ColumnGroup, Face, LightRegion, MAX_LIGHT, RenderLayer, SECTION_SIZE, Section, fluid};
 
 use crate::texture::BlockLayers;
 
@@ -63,8 +63,10 @@ impl TerrainVertex {
     }
 }
 
-/// Height of a still water surface, like vanilla (8/9 of a block).
-const WATER_SURFACE: f32 = 8.0 / 9.0;
+/// Heights of the four top corners of a block, indexed `[x][z]` (0 = west
+/// or north, 1 = east or south).
+type CornerHeights = [[f32; 2]; 2];
+const FULL_HEIGHT: CornerHeights = [[1.0; 2]; 2];
 
 /// Brightness for 0..=3 unoccluded neighbours around a vertex.
 const AO_CURVE: [f32; 4] = [0.45, 0.65, 0.82, 1.0];
@@ -82,13 +84,14 @@ pub fn corners(face: Face) -> [[f32; 3]; 4] {
     }
 }
 
-/// Corners and texture coordinates of `face`, with the top lowered to
-/// `height` (water surfaces; 1.0 is a full block).
-fn face_vertices(face: Face, height: f32) -> [([f32; 3], [f32; 2]); 4] {
+/// Corners and texture coordinates of `face`, with the top corners lowered
+/// to `heights` (water surfaces).
+fn face_vertices(face: Face, heights: CornerHeights) -> [([f32; 3], [f32; 2]); 4] {
     const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     let mut out = [([0.0; 3], [0.0; 2]); 4];
     for (i, (mut corner, mut uv)) in corners(face).into_iter().zip(UVS).enumerate() {
         if corner[1] > 0.5 {
+            let height = heights[corner[0] as usize][corner[2] as usize];
             corner[1] = height;
             // Crop side textures instead of squashing them.
             if face != Face::Up && face != Face::Down {
@@ -125,12 +128,12 @@ fn push_terrain_face(
     layer: u32,
     ao: [u8; 4],
     sky: [f32; 4],
-    height: f32,
+    heights: CornerHeights,
 ) {
     let unorm8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let shade = unorm8(face_shade(face));
     let mut quad = [TerrainVertex::zeroed(); 4];
-    for (i, (corner, uv)) in face_vertices(face, height).into_iter().enumerate() {
+    for (i, (corner, uv)) in face_vertices(face, heights).into_iter().enumerate() {
         let p = (pos.as_vec3() + Vec3::from(corner)) * POSITION_SCALE;
         quad[i] = TerrainVertex {
             position: [p.x as u16, p.y as u16, p.z as u16, layer as u16],
@@ -165,7 +168,7 @@ impl MeshData {
         let base = self.vertices.len() as u32;
         let normal = face.offset().map(|c| c as f32);
         let origin = pos.as_vec3();
-        for (((corner, uv), ao), sky) in face_vertices(face, height).into_iter().zip(ao).zip(sky) {
+        for (((corner, uv), ao), sky) in face_vertices(face, [[height; 2]; 2]).into_iter().zip(ao).zip(sky) {
             self.vertices.push(Vertex {
                 position: (origin + Vec3::from(corner)).to_array(),
                 uv,
@@ -243,6 +246,69 @@ impl Neighborhood {
         self.sections[Self::index(section)].as_ref().map_or(Block::Air, |s| s.get(wrap(x), wrap(y), wrap(z)))
     }
 
+    /// Vanilla's fluid height of a block for smoothing water surfaces:
+    /// 1 under more water, the water's own height, 0 for other open blocks
+    /// and -1 for solid ones.
+    fn water_height(&self, p: IVec3) -> f32 {
+        let block = self.get(p.x, p.y, p.z);
+        if block.is_water() {
+            if self.get(p.x, p.y + 1, p.z).is_water() { 1.0 } else { fluid::own_height(block) }
+        } else if block.is_solid() {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Heights of the top corners of the water at `pos`: each averages the
+    /// four blocks around it, with near-full blocks weighing ten times more,
+    /// like vanilla's FluidRenderer, so flowing water forms slopes.
+    fn water_corner_heights(&self, pos: IVec3) -> CornerHeights {
+        let own = self.water_height(pos);
+        if own >= 1.0 {
+            return FULL_HEIGHT;
+        }
+        let mut heights = [[0.0; 2]; 2];
+        for (xi, dx) in [(0, -1), (1, 1)] {
+            for (zi, dz) in [(0, -1), (1, 1)] {
+                let side_x = self.water_height(pos + IVec3::new(dx, 0, 0));
+                let side_z = self.water_height(pos + IVec3::new(0, 0, dz));
+                heights[xi][zi] = self.corner_height(own, side_x, side_z, pos + IVec3::new(dx, 0, dz));
+            }
+        }
+        heights
+    }
+
+    fn corner_height(&self, own: f32, side_x: f32, side_z: f32, diagonal: IVec3) -> f32 {
+        if side_x >= 1.0 || side_z >= 1.0 {
+            return 1.0;
+        }
+        let (mut sum, mut weight) = (0.0, 0.0);
+        let mut add = |h: f32| {
+            let w = if h >= 0.8 {
+                10.0
+            } else if h >= 0.0 {
+                1.0
+            } else {
+                0.0
+            };
+            sum += h * w;
+            weight += w;
+        };
+        // The diagonal block only counts when water can reach it.
+        if side_x > 0.0 || side_z > 0.0 {
+            let corner = self.water_height(diagonal);
+            if corner >= 1.0 {
+                return 1.0;
+            }
+            add(corner);
+        }
+        add(own);
+        add(side_x);
+        add(side_z);
+        sum / weight
+    }
+
     fn occludes(&self, p: IVec3) -> bool {
         self.get(p.x, p.y, p.z).is_opaque()
     }
@@ -300,21 +366,24 @@ impl Neighborhood {
                     let block = center.get(x, y, z);
                     let Some(layer) = block.render_layer() else { continue };
                     let local = IVec3::new(x, y, z);
+                    let heights = if block.is_water() { self.water_corner_heights(local) } else { FULL_HEIGHT };
                     for face in Face::ALL {
                         let [dx, dy, dz] = face.offset();
-                        if !block.face_visible(self.get(x + dx, y + dy, z + dz)) {
+                        let neighbour = self.get(x + dx, y + dy, z + dz);
+                        // A lowered water surface shows under a block too.
+                        let lowered = face == Face::Up && heights.as_flattened().iter().any(|&h| h < 1.0);
+                        if !block.face_visible(neighbour) && !(lowered && block.is_water() && !neighbour.is_water()) {
                             continue;
                         }
                         let texture = layers.get(block, face);
                         let (ao, sky) = self.face_lighting(local, face, light, origin_y);
                         match layer {
                             RenderLayer::Solid => {
-                                push_terrain_face(&mut mesh.solid, local, face, texture, ao, sky, 1.0)
+                                push_terrain_face(&mut mesh.solid, local, face, texture, ao, sky, FULL_HEIGHT)
                             }
                             // No AO on water, it looks wrong on a flat surface.
                             RenderLayer::Translucent => {
-                                let height = if self.get(x, y + 1, z) == Block::Water { 1.0 } else { WATER_SURFACE };
-                                push_terrain_face(&mut mesh.translucent, local, face, texture, [3; 4], sky, height)
+                                push_terrain_face(&mut mesh.translucent, local, face, texture, [3; 4], sky, heights)
                             }
                         }
                     }

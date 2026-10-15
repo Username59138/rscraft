@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use glam::{IVec2, IVec3, Vec3};
+use rscraft_world::fluid::{FluidTicks, FluidWorld, WATER_TICK_DELAY};
 use rscraft_world::{
     Block, ColumnGroup, ColumnLight, Generator, LightRegion, MIN_SECTION_Y, SECTION_SIZE, SECTIONS_PER_COLUMN, Section,
 };
@@ -53,6 +54,10 @@ pub struct ChunkManager {
     light: HashMap<IVec2, ColumnLight>,
     lit_tx: Sender<(IVec2, u32, ColumnLight)>,
     lit_rx: Receiver<(IVec2, u32, ColumnLight)>,
+
+    /// Game ticks since the world was opened.
+    game_time: u64,
+    fluid_ticks: FluidTicks,
 }
 
 pub fn column_of(position: Vec3) -> IVec2 {
@@ -82,6 +87,8 @@ impl ChunkManager {
             light: HashMap::new(),
             lit_tx,
             lit_rx,
+            game_time: 0,
+            fluid_ticks: FluidTicks::default(),
         }
     }
 
@@ -109,9 +116,41 @@ impl ChunkManager {
         self.sections.get(&section).map(|s| s.get(local.x, local.y, local.z))
     }
 
+    /// Changes a block like the player does: water next to it reacts.
+    /// Returns false if it isn't loaded.
+    pub fn set_block(&mut self, pos: IVec3, block: Block) -> bool {
+        if !self.put_block(pos, block) {
+            return false;
+        }
+        let mut ticks = std::mem::take(&mut self.fluid_ticks);
+        ticks.block_changed(&*self, pos, self.game_time);
+        self.fluid_ticks = ticks;
+        true
+    }
+
+    /// One game tick of the world itself: flowing water.
+    pub fn tick(&mut self) {
+        self.game_time += 1;
+        let mut ticks = std::mem::take(&mut self.fluid_ticks);
+        ticks.run(self, self.game_time);
+        self.fluid_ticks = ticks;
+    }
+
+    /// Water updates still to come, to save with the world.
+    pub fn pending_fluid_ticks(&self) -> Vec<IVec3> {
+        self.fluid_ticks.pending().collect()
+    }
+
+    /// Restores saved water updates.
+    pub fn schedule_fluid_ticks(&mut self, positions: impl IntoIterator<Item = IVec3>) {
+        for pos in positions {
+            self.fluid_ticks.schedule(pos, self.game_time + WATER_TICK_DELAY);
+        }
+    }
+
     /// Changes a block, records the edit and re-meshes the columns whose
     /// geometry or light it can affect. Returns false if it isn't loaded.
-    pub fn set_block(&mut self, pos: IVec3, block: Block) -> bool {
+    fn put_block(&mut self, pos: IVec3, block: Block) -> bool {
         let section_pos = pos.div_euclid(IVec3::splat(SECTION_SIZE));
         let local = pos.rem_euclid(IVec3::splat(SECTION_SIZE));
         let Some(section) = self.sections.get_mut(&section_pos) else { return false };
@@ -295,5 +334,15 @@ impl ChunkManager {
                 let _ = tx.send((column, sections));
             });
         }
+    }
+}
+
+impl FluidWorld for ChunkManager {
+    fn block(&self, pos: IVec3) -> Option<Block> {
+        self.block_at(pos)
+    }
+
+    fn set_block(&mut self, pos: IVec3, block: Block) -> bool {
+        self.put_block(pos, block)
     }
 }
