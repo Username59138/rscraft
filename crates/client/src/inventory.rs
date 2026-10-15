@@ -49,6 +49,18 @@ impl Inventory {
         count
     }
 
+    /// How many of `block` would fit.
+    pub fn room_for(&self, block: Block) -> usize {
+        self.slots
+            .iter()
+            .map(|slot| match slot {
+                None => MAX_STACK as usize,
+                Some(s) if s.block == block => (MAX_STACK - s.count) as usize,
+                Some(_) => 0,
+            })
+            .sum()
+    }
+
     pub fn selected_stack(&self) -> Option<ItemStack> {
         self.slots[self.selected]
     }
@@ -86,34 +98,38 @@ impl Inventory {
         }
     }
 
-    /// A click on a slot with `cursor` being the stack held by the mouse,
-    /// following vanilla: left click picks up, puts down, merges or swaps;
-    /// right click picks up half or puts down one.
+    /// A click on one of the 36 slots; see [`click_slot`].
     pub fn click(&mut self, index: usize, right: bool, cursor: &mut Option<ItemStack>) {
-        let with_count = |stack: ItemStack, count: u8| (count > 0).then_some(ItemStack { count, ..stack });
-        let slot = &mut self.slots[index];
-        (*slot, *cursor) = match (*slot, *cursor, right) {
-            // Pick up all, or half rounded up.
-            (Some(s), None, false) => (None, Some(s)),
-            (Some(s), None, true) => (with_count(s, s.count / 2), with_count(s, s.count.div_ceil(2))),
-            // Put down all, or one.
-            (None, Some(c), false) => (Some(c), None),
-            (None, Some(c), true) => (with_count(c, 1), with_count(c, c.count - 1)),
-            // Same item: merge all, or one, up to a full stack.
-            (Some(s), Some(c), _) if s.block == c.block => {
-                let moved = if right { 1 } else { c.count }.min(MAX_STACK - s.count);
-                (with_count(s, s.count + moved), with_count(c, c.count - moved))
-            }
-            // Different items: swap.
-            (Some(s), Some(c), false) => (Some(c), Some(s)),
-            unchanged => (unchanged.0, unchanged.1),
-        };
+        click_slot(&mut self.slots[index], right, cursor);
     }
 
     /// Mouse wheel over the hotbar: positive notches go left, like vanilla.
     pub fn scroll(&mut self, notches: i32) {
         self.selected = (self.selected as i32 - notches).rem_euclid(HOTBAR as i32) as usize;
     }
+}
+
+/// A click on a slot with `cursor` being the stack held by the mouse,
+/// following vanilla: left click picks up, puts down, merges or swaps;
+/// right click picks up half or puts down one.
+pub fn click_slot(slot: &mut Option<ItemStack>, right: bool, cursor: &mut Option<ItemStack>) {
+    let with_count = |stack: ItemStack, count: u8| (count > 0).then_some(ItemStack { count, ..stack });
+    (*slot, *cursor) = match (*slot, *cursor, right) {
+        // Pick up all, or half rounded up.
+        (Some(s), None, false) => (None, Some(s)),
+        (Some(s), None, true) => (with_count(s, s.count / 2), with_count(s, s.count.div_ceil(2))),
+        // Put down all, or one.
+        (None, Some(c), false) => (Some(c), None),
+        (None, Some(c), true) => (with_count(c, 1), with_count(c, c.count - 1)),
+        // Same item: merge all, or one, up to a full stack.
+        (Some(s), Some(c), _) if s.block == c.block => {
+            let moved = if right { 1 } else { c.count }.min(MAX_STACK - s.count);
+            (with_count(s, s.count + moved), with_count(c, c.count - moved))
+        }
+        // Different items: swap.
+        (Some(s), Some(c), false) => (Some(c), Some(s)),
+        unchanged => (unchanged.0, unchanged.1),
+    };
 }
 
 #[cfg(test)]

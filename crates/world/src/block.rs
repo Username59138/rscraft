@@ -14,6 +14,8 @@ pub enum Block {
     Water,
     OakLog,
     OakLeaves,
+    OakPlanks,
+    CraftingTable,
 }
 
 /// The six cube faces, named after the direction they point to.
@@ -79,7 +81,7 @@ impl FaceTexture {
 }
 
 impl Block {
-    pub const ALL: [Block; 10] = [
+    pub const ALL: [Block; 12] = [
         Block::Air,
         Block::Stone,
         Block::Dirt,
@@ -90,6 +92,8 @@ impl Block {
         Block::Water,
         Block::OakLog,
         Block::OakLeaves,
+        Block::OakPlanks,
+        Block::CraftingTable,
     ];
 
     /// Full opaque cube that hides the faces of its neighbours.
@@ -116,6 +120,8 @@ impl Block {
             Block::Grass | Block::Gravel => Some(0.6),
             Block::OakLog => Some(2.0),
             Block::OakLeaves => Some(0.2),
+            Block::OakPlanks => Some(2.0),
+            Block::CraftingTable => Some(2.5),
         }
     }
 
@@ -147,6 +153,8 @@ impl Block {
             Block::Water => "Water",
             Block::OakLog => "Oak Log",
             Block::OakLeaves => "Oak Leaves",
+            Block::OakPlanks => "Oak Planks",
+            Block::CraftingTable => "Crafting Table",
         }
     }
 
@@ -199,6 +207,14 @@ impl Block {
                 _ => FaceTexture::plain("oak_log"),
             },
             Block::OakLeaves => FaceTexture::tinted("oak_leaves", Tint::Foliage),
+            Block::OakPlanks => FaceTexture::plain("oak_planks"),
+            // Like vanilla's model: the front texture on north and west.
+            Block::CraftingTable => FaceTexture::plain(match face {
+                Face::Up => "crafting_table_top",
+                Face::Down => "oak_planks",
+                Face::North | Face::West => "crafting_table_front",
+                Face::South | Face::East => "crafting_table_side",
+            }),
         }
     }
 }

@@ -2,6 +2,7 @@ mod app;
 mod camera;
 mod chunks;
 mod clouds;
+mod crafting;
 mod debug;
 mod frustum;
 mod hud;

@@ -2,11 +2,17 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::inventory::{HOTBAR, Inventory, ItemStack, SLOTS};
+use crate::crafting::{self, Grid};
+use crate::inventory::{self as inv, HOTBAR, Inventory, ItemStack, SLOTS};
 use crate::ui::{Rect, Sprite, Ui};
 
 const WIDTH: f32 = 176.0;
 const HEIGHT: f32 = 166.0;
+/// The 2×2 crafting grid and its result slot.
+const GRID: [(f32, f32); 4] = [(98.0, 18.0), (116.0, 18.0), (98.0, 36.0), (116.0, 36.0)];
+const RESULT: (f32, f32) = (154.0, 28.0);
+/// The black box where the player is shown.
+const PREVIEW: Rect = Rect::new(26.0, 8.0, 49.0, 70.0);
 
 pub enum InventoryAction {
     None,
@@ -23,29 +29,67 @@ fn slot_position(index: usize) -> (f32, f32) {
     }
 }
 
-pub fn draw(ui: &mut Ui, inventory: &mut Inventory, cursor: &mut Option<ItemStack>, shift: bool) -> InventoryAction {
+fn origin(ui: &Ui) -> (f32, f32) {
+    (((ui.width - WIDTH) / 2.0).floor(), ((ui.height - HEIGHT) / 2.0).floor())
+}
+
+/// Where the player model goes, in GUI units.
+pub fn preview_rect(ui: &Ui) -> Rect {
+    let (left, top) = origin(ui);
+    Rect::new(left + PREVIEW.x, top + PREVIEW.y, PREVIEW.w, PREVIEW.h)
+}
+
+/// A slot: draws its item and hover highlight, returns whether the mouse is over it.
+fn slot(ui: &mut Ui, x: f32, y: f32, stack: Option<ItemStack>) -> bool {
+    let rect = Rect::new(x, y, 16.0, 16.0);
+    if let Some(stack) = stack {
+        ui.item(stack.block, stack.count, x, y);
+    }
+    let hovered = rect.contains(ui.input.mouse);
+    if hovered {
+        // Vanilla's white highlight over the hovered slot.
+        ui.fill(rect, 0xffffff, 0.5);
+    }
+    hovered
+}
+
+pub fn draw(ui: &mut Ui, inventory: &mut Inventory, grid: &mut Grid, cursor: &mut Option<ItemStack>, shift: bool) -> InventoryAction {
     // Vanilla's in-game screen background, about 75% black.
     ui.fill(Rect::new(0.0, 0.0, ui.width, ui.height), 0x101010, 0.75);
-    let left = ((ui.width - WIDTH) / 2.0).floor();
-    let top = ((ui.height - HEIGHT) / 2.0).floor();
+    let (left, top) = origin(ui);
     ui.sprite_region(Sprite::InventoryScreen, 0.0, 0.0, Rect::new(left, top, WIDTH, HEIGHT));
     ui.text_flat(left + 97.0, top + 8.0, "Crafting", 0x404040);
 
     let (clicked, right_clicked) = (ui.input.clicked, ui.input.right_clicked);
     for index in 0..SLOTS {
         let (x, y) = slot_position(index);
-        let rect = Rect::new(left + x, top + y, 16.0, 16.0);
-        if let Some(stack) = inventory.slots[index] {
-            ui.item(stack.block, stack.count, rect.x, rect.y);
-        }
-        if rect.contains(ui.input.mouse) {
-            // Vanilla's white highlight over the hovered slot.
-            ui.fill(rect, 0xffffff, 0.5);
+        if slot(ui, left + x, top + y, inventory.slots[index]) {
             if clicked && shift {
                 inventory.quick_move(index);
             } else if clicked || right_clicked {
                 inventory.click(index, right_clicked, cursor);
             }
+        }
+    }
+
+    for (i, (x, y)) in GRID.into_iter().enumerate() {
+        if slot(ui, left + x, top + y, grid[i]) {
+            if clicked && shift {
+                // Back into the inventory, whatever fits.
+                if let Some(stack) = grid[i] {
+                    let left = inventory.add(stack.block, stack.count);
+                    grid[i] = (left > 0).then_some(ItemStack { count: left, ..stack });
+                }
+            } else if clicked || right_clicked {
+                inv::click_slot(&mut grid[i], right_clicked, cursor);
+            }
+        }
+    }
+    if slot(ui, left + RESULT.0, top + RESULT.1, crafting::result(grid)) && clicked {
+        if shift {
+            crafting::take_all(grid, inventory);
+        } else {
+            crafting::take_result(grid, cursor);
         }
     }
 

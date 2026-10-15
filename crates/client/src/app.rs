@@ -24,7 +24,8 @@ use crate::mesh::MeshData;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
-use crate::renderer::{EntityImages, Renderer, Underwater};
+use crate::crafting::Grid;
+use crate::renderer::{EntityImages, PREVIEW_DEPTH, Preview, Renderer, Underwater};
 use crate::shadows::Caster;
 use crate::selection::Selection;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
@@ -65,6 +66,8 @@ struct Session {
     inventory: Inventory,
     /// The stack held by the mouse in the inventory screen.
     cursor: Option<ItemStack>,
+    /// The inventory's 2×2 crafting grid.
+    crafting: Grid,
     items: Items,
     particles: Particles,
     hit_particle_timer: f32,
@@ -135,6 +138,7 @@ impl Session {
             player: None,
             inventory: Inventory::default(),
             cursor: None,
+            crafting: Grid::default(),
             items: Items::default(),
             particles: Particles::default(),
             hit_particle_timer: 0.0,
@@ -171,6 +175,7 @@ impl Session {
             player: Some(player),
             inventory,
             cursor: None,
+            crafting: Grid::default(),
             items: Items::default(),
             particles: Particles::default(),
             hit_particle_timer: 0.0,
@@ -336,13 +341,39 @@ impl Session {
     }
 
     /// Puts the stack held by the mouse back, dropping what doesn't fit.
+    /// Closing the inventory puts the stack on the cursor and whatever is
+    /// in the crafting grid back, dropping what doesn't fit.
     fn return_cursor(&mut self) {
-        if let Some(stack) = self.cursor.take() {
+        let stacks: Vec<ItemStack> = self.cursor.take().into_iter().chain(self.crafting.iter_mut().filter_map(Option::take)).collect();
+        for stack in stacks {
             let left = self.inventory.add(stack.block, stack.count);
             if left > 0 && let Some(player) = &self.player {
                 self.items.throw(player.eye(), self.camera.forward(), stack.block, left);
             }
         }
+    }
+
+    /// The player in the inventory screen, turning towards the mouse like
+    /// vanilla's renderEntityInInventoryFollowsMouse.
+    fn preview(&self, rect: Rect, mouse: glam::Vec2, gui_scale: f32, layers: &BlockLayers) -> Preview {
+        let center = glam::Vec2::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+        let (turn, tilt) = (((center.x - mouse.x) / 40.0).atan(), ((center.y - mouse.y) / 40.0).atan());
+        let pose = PlayerPose {
+            feet: Vec3::new(0.0, 0.0, -PREVIEW_DEPTH),
+            // Facing the viewer, turned 20° (body) and 40° (head) per radian.
+            yaw: std::f32::consts::PI + turn * 20f32.to_radians(),
+            head_yaw: turn * 20f32.to_radians(),
+            head_pitch: tilt * 20f32.to_radians(),
+            swing: 0.0,
+            light: 1.0,
+            swim: 0.0,
+            limb_phase: 0.0,
+        };
+        let mut held = MeshData::default();
+        if let Some(stack) = self.inventory.selected_stack() {
+            held.push_block(stack.block, layers, player::held_block_third_person(&pose), 1.0);
+        }
+        Preview { rect, gui_scale, body: player::build_mesh(&pose), held }
     }
 
     /// The underwater look when the camera is in water: vanilla's dark blue
@@ -398,6 +429,7 @@ impl Session {
             swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
             light: self.player_light,
             swim: player.swim_amount(),
+            head_yaw: 0.0,
             limb_phase: walk * 3.6,
         })
     }
@@ -741,7 +773,8 @@ impl State {
         if matches!(self.screen, Screen::Inventory) {
             let shift = self.input.is_pressed(KeyCode::ShiftLeft) || self.input.is_pressed(KeyCode::ShiftRight);
             let session = &mut self.session;
-            if let InventoryAction::Close = inventory_screen::draw(&mut self.ui, &mut session.inventory, &mut session.cursor, shift) {
+            let (inventory, crafting, cursor) = (&mut session.inventory, &mut session.crafting, &mut session.cursor);
+            if let InventoryAction::Close = inventory_screen::draw(&mut self.ui, inventory, crafting, cursor, shift) {
                 session.return_cursor();
                 self.open(Screen::None);
             }
@@ -792,6 +825,10 @@ impl State {
         }
         let chunks = &self.session.chunks;
         self.renderer.prepare_shadows(&casters, &|pos| chunks.block_at(pos));
+        let preview = matches!(self.screen, Screen::Inventory).then(|| {
+            let rect = inventory_screen::preview_rect(&self.ui);
+            self.session.preview(rect, self.ui.input.mouse, self.ui.scale, &self.layers)
+        });
         let camera = self.session.camera.for_perspective(perspective);
         let underwater = self.session.underwater(&camera, dt);
         self.renderer.render(
@@ -813,6 +850,7 @@ impl State {
             &self.ui.vertices,
             self.ui.inverted.clone(),
             [self.ui.width, self.ui.height],
+            preview.as_ref(),
         );
         self.ui.input.end_frame();
 

@@ -33,6 +33,8 @@ pub struct PlayerPose {
     pub light: f32,
     /// 0..1 blend into the horizontal swimming pose.
     pub swim: f32,
+    /// How far the head is turned from the body, in radians.
+    pub head_yaw: f32,
     /// Walk/swim cycle phase in radians, drives the swimming strokes.
     pub limb_phase: f32,
 }
@@ -198,7 +200,9 @@ fn body_transform(pose: &PlayerPose) -> Mat4 {
 fn part_transform(pose: &PlayerPose, part: &Part, angle: f32) -> Mat4 {
     let world = body_transform(pose);
     let pivot = Vec3::from(part.pivot);
-    world * Mat4::from_translation(pivot) * Mat4::from_rotation_x(angle) * Mat4::from_translation(-pivot)
+    // Only the head turns sideways on its own.
+    let yaw = if part.uv == HEAD.uv { pose.head_yaw } else { 0.0 };
+    world * Mat4::from_translation(pivot) * Mat4::from_rotation_y(-yaw) * Mat4::from_rotation_x(angle) * Mat4::from_translation(-pivot)
 }
 
 /// Builds the first-person right arm in world space, placed in front of the
@@ -256,6 +260,9 @@ pub struct PlayerRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
+    /// The player shown in the inventory screen.
+    preview_buffer: wgpu::Buffer,
+    preview_vertices: u32,
     body_vertices: u32,
     hand_vertices: u32,
 }
@@ -367,7 +374,13 @@ impl PlayerRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { pipeline, bind_group, vertex_buffer, body_vertices: 0, hand_vertices: 0 }
+        let preview_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("player preview vertices"),
+            size: (2 * 6 * 36 * size_of::<EntityVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { pipeline, bind_group, vertex_buffer, preview_buffer, preview_vertices: 0, body_vertices: 0, hand_vertices: 0 }
     }
 
     /// Uploads this frame's body and first-person hand; call before the
@@ -402,6 +415,24 @@ impl PlayerRenderer {
 
     /// The hand goes in its own pass with a cleared depth buffer, so it is
     /// never hidden by blocks the camera is close to.
+    /// Uploads the inventory-screen player; call before the render pass.
+    pub fn prepare_preview(&mut self, queue: &wgpu::Queue, vertices: &[EntityVertex]) {
+        if !vertices.is_empty() {
+            queue.write_buffer(&self.preview_buffer, 0, bytemuck::cast_slice(vertices));
+        }
+        self.preview_vertices = vertices.len() as u32;
+    }
+
+    pub fn draw_preview(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.preview_vertices == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(1, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.preview_buffer.slice(..));
+        pass.draw(0..self.preview_vertices, 0..1);
+    }
+
     pub fn draw_hand(&self, pass: &mut wgpu::RenderPass<'_>) {
         self.draw_range(pass, self.body_vertices..self.body_vertices + self.hand_vertices);
     }
