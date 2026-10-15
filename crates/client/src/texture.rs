@@ -23,7 +23,15 @@ pub struct BlockLayers {
     table: [[u32; 6]; Block::ALL.len()],
     /// First of the ten consecutive block-breaking crack layers.
     destroy_stages: u32,
+    /// First of the four splash particle layers.
+    pub splash: u32,
+    pub bubble: u32,
+    /// Vanilla's tiny suspended "underwater" particle, pre-tinted.
+    pub underwater: u32,
 }
+
+/// Number of splash particle textures, splash_0..3.
+pub const SPLASH_FRAMES: u32 = 4;
 
 /// Number of crack textures, destroy_stage_0..9.
 pub const DESTROY_STAGES: u32 = 10;
@@ -108,8 +116,32 @@ impl BlockImages {
             images.push(Layer::new(vec![image], 1));
         }
 
+        // Particle sprites, scaled up from 8×8 to share the block array.
+        let mut particle = |name: &str, tint: [u8; 3]| {
+            let image = jar
+                .as_deref_mut()
+                .and_then(|jar| jar.texture(&format!("particle/{name}")).map_err(|err| log::warn!("{name}: {err:#}")).ok())
+                .map_or_else(missing_texture, |image| image.resized(TEXTURE_SIZE, TEXTURE_SIZE));
+            let image = RgbaImage {
+                pixels: image.pixels.chunks_exact(4).flat_map(|p| {
+                    let [r, g, b] = [0, 1, 2].map(|i| (p[i] as u16 * tint[i] as u16 / 255) as u8);
+                    [r, g, b, p[3]]
+                }).collect(),
+                ..image
+            };
+            images.push(Layer::new(vec![image], 1));
+            images.len() as u32 - 1
+        };
+        let splash = particle("splash_0", [255; 3]);
+        for frame in 1..SPLASH_FRAMES {
+            particle(&format!("splash_{frame}"), [255; 3]);
+        }
+        let bubble = particle("bubble", [255; 3]);
+        // SuspendedParticle's underwater colour: (0.4, 0.4, 0.7).
+        let underwater = particle("generic_0", [102, 102, 179]);
+
         log::info!("loaded {} block textures", images.len() - 1);
-        Self { layers: BlockLayers { table, destroy_stages }, images }
+        Self { layers: BlockLayers { table, destroy_stages, splash, bubble, underwater }, images }
     }
 
     /// The top, south and east face images of a block, for inventory icons.

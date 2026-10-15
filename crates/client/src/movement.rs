@@ -10,6 +10,11 @@ const HALF_WIDTH: f32 = 0.3;
 const HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;
 const SNEAK_EYE_HEIGHT: f32 = 1.27;
+/// Swimming players are 0.6 tall with their eyes at 0.4, like vanilla.
+const SWIM_HEIGHT: f32 = 0.6;
+const SWIM_EYE_HEIGHT: f32 = 0.4;
+/// Height of a still water surface within its block.
+const WATER_SURFACE: f32 = 8.0 / 9.0;
 
 const GRAVITY: f32 = 0.08;
 const AIR_DRAG: f32 = 0.98;
@@ -30,6 +35,8 @@ pub struct Controls {
     pub jump: bool,
     pub sneak: bool,
     pub sprint: bool,
+    /// Vertical component of the look direction, -1..1; steers swimming.
+    pub look_y: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -39,10 +46,10 @@ struct Aabb {
 }
 
 impl Aabb {
-    fn player(feet: Vec3) -> Self {
+    fn player(feet: Vec3, height: f32) -> Self {
         Self {
             min: feet - Vec3::new(HALF_WIDTH, 0.0, HALF_WIDTH),
-            max: feet + Vec3::new(HALF_WIDTH, HEIGHT, HALF_WIDTH),
+            max: feet + Vec3::new(HALF_WIDTH, height, HALF_WIDTH),
         }
     }
 
@@ -76,7 +83,18 @@ pub struct PlayerController {
     pub flying: bool,
     pub sprinting: bool,
     pub sneaking: bool,
+    /// Sprint-swimming: lying flat and moving where the player looks.
+    pub swimming: bool,
     in_water: bool,
+    /// Any part of the hitbox is in water (vanilla's isInWater).
+    touching_water: bool,
+    height: f32,
+    /// 0..1 blend into the swimming pose, at the last two ticks.
+    swim_amount: f32,
+    previous_swim_amount: f32,
+    /// Set on the tick the player falls into water: where, the water
+    /// surface height and the speed, for the splash effect.
+    pub splash: Option<(Vec3, f32, Vec3)>,
     accumulator: f32,
     ticks: u32,
     jump_held: bool,
@@ -101,7 +119,13 @@ impl PlayerController {
             flying,
             sprinting: false,
             sneaking: false,
+            swimming: false,
             in_water: false,
+            touching_water: false,
+            height: HEIGHT,
+            swim_amount: 0.0,
+            previous_swim_amount: 0.0,
+            splash: None,
             accumulator: 0.0,
             ticks: 0,
             jump_held: false,
@@ -131,6 +155,15 @@ impl PlayerController {
         self.previous.lerp(self.position, self.alpha())
     }
 
+    /// How far into the swimming pose the player is, 0..1, interpolated.
+    pub fn swim_amount(&self) -> f32 {
+        self.previous_swim_amount + (self.swim_amount - self.previous_swim_amount) * self.alpha()
+    }
+
+    fn aabb(&self) -> Aabb {
+        Aabb::player(self.position, self.height)
+    }
+
     /// View bobbing phase and strength, interpolated.
     pub fn bobbing(&self) -> (f32, f32) {
         let a = self.alpha();
@@ -140,7 +173,7 @@ impl PlayerController {
 
     /// Whether the player's hitbox overlaps the block at `pos`.
     pub fn intersects_block(&self, pos: IVec3) -> bool {
-        let player = Aabb::player(self.position);
+        let player = self.aabb();
         let min = pos.as_vec3();
         player.min.cmplt(min + Vec3::ONE).all() && player.max.cmpgt(min).all()
     }
@@ -148,7 +181,7 @@ impl PlayerController {
     /// Moves up out of any blocks the player is stuck in, e.g. a tree at spawn.
     pub fn unstuck(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         for _ in 0..64 {
-            if !Self::collides(&Aabb::player(self.position), world) {
+            if !Self::collides(&self.aabb(), world) {
                 break;
             }
             self.position.y = self.position.y.floor() + 1.0;
@@ -175,6 +208,7 @@ impl PlayerController {
         self.previous_eye_height = self.eye_height;
         self.previous_walk_distance = self.walk_distance;
         self.previous_bob = self.bob;
+        self.previous_swim_amount = self.swim_amount;
 
         // Double-tapping jump toggles flying.
         let jump_pressed = controls.jump && !self.jump_held;
@@ -188,11 +222,20 @@ impl PlayerController {
             }
         }
 
-        self.sneaking = controls.sneak && !self.flying;
+        self.sneaking = controls.sneak && !self.flying && !self.swimming;
         self.sprinting = controls.sprint && controls.forward > 0.0 && !self.sneaking;
-        let target_eye = if self.sneaking { SNEAK_EYE_HEIGHT } else { EYE_HEIGHT };
-        self.eye_height += (target_eye - self.eye_height) * 0.5;
         self.in_water = world((self.position + Vec3::Y * 0.4).floor().as_ivec3()) == Some(Block::Water);
+        self.update_swimming(world);
+        let target_eye = if self.swimming {
+            SWIM_EYE_HEIGHT
+        } else if self.sneaking {
+            SNEAK_EYE_HEIGHT
+        } else {
+            EYE_HEIGHT
+        };
+        self.eye_height += (target_eye - self.eye_height) * 0.5;
+        let target_swim = if self.swimming { 1.0 } else { 0.0 };
+        self.swim_amount += (target_swim - self.swim_amount).clamp(-0.09, 0.09);
 
         let mut input = Vec2::new(controls.strafe, controls.forward);
         if input.length_squared() > 1.0 {
@@ -223,18 +266,32 @@ impl PlayerController {
                 self.flying = false;
             }
         } else if self.in_water {
+            // Swimming steers up and down with the look direction (Player.travel).
+            if self.swimming {
+                let d = controls.look_y;
+                let rate = if d < -0.2 { 0.085 } else { 0.06 };
+                let head = self.position + Vec3::Y * (1.0 - 0.1);
+                if d <= 0.0 || controls.jump || world(head.floor().as_ivec3()) == Some(Block::Water) {
+                    self.velocity.y += (d - self.velocity.y) * rate;
+                }
+            }
             accelerate(&mut self.velocity, 0.02);
             if controls.jump {
                 self.velocity.y += 0.04;
             }
             let start_y = self.position.y;
             self.move_by(world);
-            self.velocity *= 0.8;
-            self.velocity.y -= 0.02;
+            // Sprinting (and swimming) cuts water drag, which is what makes it faster.
+            let drag = if self.sprinting { 0.9 } else { 0.8 };
+            self.velocity *= Vec3::new(drag, 0.8, drag);
+            // Sinking: vanilla's fluid-falling adjustment (gravity / 16), none while sprinting.
+            if !self.sprinting {
+                self.velocity.y -= GRAVITY / 16.0;
+            }
             // Vanilla's way out of water: swimming against a ledge with room
             // above it gives a boost up and over.
             let above = Vec3::new(self.velocity.x, self.velocity.y + 0.6 - self.position.y + start_y, self.velocity.z);
-            if self.horizontal_collision && !Self::collides(&Aabb::player(self.position).offset(above), world) {
+            if self.horizontal_collision && !Self::collides(&self.aabb().offset(above), world) {
                 self.velocity.y = 0.3;
             }
         } else {
@@ -260,11 +317,56 @@ impl PlayerController {
             self.velocity.z *= friction;
         }
 
+        // Falling into water makes a splash.
+        let was_touching = self.touching_water;
+        self.touching_water = Self::touches_water(&self.aabb(), world);
+        if self.touching_water && !was_touching && self.ticks > 1 {
+            let surface = self.water_surface(world).unwrap_or(self.position.y);
+            self.splash = Some((self.position, surface, self.velocity));
+        }
+
         // Walking animation, only while on the ground.
         let moved = (self.position - self.previous) * Vec3::new(1.0, 0.0, 1.0);
         let target_bob = if self.on_ground && !self.flying { moved.length().min(0.1) } else { 0.0 };
         self.bob += (target_bob - self.bob) * 0.4;
         self.walk_distance += moved.length() * 0.6;
+    }
+
+    /// Vanilla's updateSwimming: start swimming when sprinting with the eyes
+    /// under water, keep swimming while sprinting in water, and only stand
+    /// up again once there is room.
+    fn update_swimming(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
+        let eye = self.position + Vec3::Y * self.eye_height;
+        let eye_in_water = world(eye.floor().as_ivec3()) == Some(Block::Water);
+        let want = if self.swimming {
+            self.sprinting && self.in_water && !self.flying
+        } else {
+            self.sprinting && eye_in_water && self.in_water && !self.flying
+        };
+        if want {
+            self.swimming = true;
+            self.height = SWIM_HEIGHT;
+        } else if self.swimming && !Self::collides(&Aabb::player(self.position, HEIGHT), world) {
+            self.swimming = false;
+            self.height = HEIGHT;
+        }
+    }
+
+    /// Top of the water at the player's position, if they're in water.
+    fn water_surface(&self, world: &impl Fn(IVec3) -> Option<Block>) -> Option<f32> {
+        let base = self.position.floor().as_ivec3();
+        (0..3)
+            .map(|dy| base + IVec3::Y * dy)
+            .take_while(|&pos| world(pos) == Some(Block::Water))
+            .last()
+            .map(|pos| pos.y as f32 + WATER_SURFACE)
+    }
+
+    fn touches_water(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {
+        let (min, max) = (aabb.min.floor().as_ivec3(), (aabb.max - 1e-4).floor().as_ivec3());
+        (min.y..=max.y).any(|y| {
+            (min.z..=max.z).any(|z| (min.x..=max.x).any(|x| world(IVec3::new(x, y, z)) == Some(Block::Water)))
+        })
     }
 
     fn collides(aabb: &Aabb, world: &impl Fn(IVec3) -> Option<Block>) -> bool {
@@ -284,7 +386,7 @@ impl PlayerController {
     /// Moves by the current velocity, sliding along whatever is in the way.
     fn move_by(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         let mut d = self.velocity;
-        let start = Aabb::player(self.position);
+        let start = self.aabb();
 
         // Sneaking keeps you from walking off edges.
         if self.sneaking && self.on_ground {

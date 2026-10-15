@@ -31,6 +31,10 @@ pub struct PlayerPose {
     pub swing: f32,
     /// Sky light level at the player, 0..1.
     pub light: f32,
+    /// 0..1 blend into the horizontal swimming pose.
+    pub swim: f32,
+    /// Walk/swim cycle phase in radians, drives the swimming strokes.
+    pub limb_phase: f32,
 }
 
 /// A box of the model in model pixels (Y up from the feet, front towards -Z,
@@ -177,9 +181,22 @@ pub fn held_block_third_person(pose: &PlayerPose) -> Mat4 {
         * Mat4::from_translation(Vec3::splat(-0.5))
 }
 
+/// Model-pixel to world transform of the whole body. When swimming the body
+/// tips forward to lie along the look direction, centred on the 0.6 block
+/// tall swimming hitbox (vanilla's setupRotations).
+fn body_transform(pose: &PlayerPose) -> Mat4 {
+    let s = pose.swim;
+    let tip = (-std::f32::consts::FRAC_PI_2 + pose.head_pitch) * s;
+    Mat4::from_translation(pose.feet + Vec3::Y * 0.3 * s)
+        * Mat4::from_rotation_y(-pose.yaw)
+        * Mat4::from_rotation_x(tip)
+        * Mat4::from_translation(Vec3::Y * -0.9 * s)
+        * Mat4::from_scale(Vec3::splat(PIXEL))
+}
+
 /// Model-pixel to world transform of a body part rotated about its pivot.
 fn part_transform(pose: &PlayerPose, part: &Part, angle: f32) -> Mat4 {
-    let world = Mat4::from_translation(pose.feet) * Mat4::from_rotation_y(-pose.yaw) * Mat4::from_scale(Vec3::splat(PIXEL));
+    let world = body_transform(pose);
     let pivot = Vec3::from(part.pivot);
     world * Mat4::from_translation(pivot) * Mat4::from_rotation_x(angle) * Mat4::from_translation(-pivot)
 }
@@ -210,13 +227,20 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
 /// Builds the posed model as a triangle list in world space.
 pub fn build_mesh(pose: &PlayerPose) -> Vec<EntityVertex> {
     let rotated = |part: &Part, angle: f32| part_transform(pose, part, angle);
+    let s = pose.swim;
+    let lerp = |a: f32, b: f32| a + (b - a) * s;
+    let phase = pose.limb_phase;
+    // Swimming: the head looks ahead (45° up from the body), the arms crawl
+    // in alternating full strokes and the legs flutter, like vanilla.
+    let (stroke_right, stroke_left) = (phase % std::f32::consts::TAU, (phase + std::f32::consts::PI) % std::f32::consts::TAU);
+    let kick = 0.3 * (phase * 2.0).cos();
     let parts = [
-        (&HEAD, pose.head_pitch),
+        (&HEAD, lerp(pose.head_pitch, std::f32::consts::FRAC_PI_4)),
         (&BODY, 0.0),
-        (&RIGHT_ARM, pose.swing),
-        (&LEFT_ARM, -pose.swing),
-        (&RIGHT_LEG, -pose.swing),
-        (&LEFT_LEG, pose.swing),
+        (&RIGHT_ARM, lerp(pose.swing, stroke_right)),
+        (&LEFT_ARM, lerp(-pose.swing, stroke_left)),
+        (&RIGHT_LEG, lerp(-pose.swing, kick)),
+        (&LEFT_LEG, lerp(pose.swing, -kick)),
     ];
     let mut out = Vec::with_capacity(parts.len() * 2 * 36);
     for (part, angle) in parts {

@@ -15,6 +15,11 @@ struct Globals {
     sunset: vec4<f32>,
     // x = fog start, y = fog end, z = cloud height, w = cloud extent
     params: vec4<f32>,
+    // x = 1 when the camera is under water, y = water fog end,
+    // zw = underwater overlay texture offset
+    water: vec4<f32>,
+    // rgb = water fog colour (sRGB), w = sky light at the eyes (0..1)
+    water_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -60,12 +65,25 @@ fn entity_shade(normal: vec3<f32>) -> f32 {
     return min(1.0, (max(dot(light0, n), 0.0) + max(dot(light1, n), 0.0)) * 0.6 + 0.4);
 }
 
-/// Cylindrical fog like Minecraft: horizontal distance only.
+/// Under water the fog is a dark blue, dimmed at night.
+fn water_fog_color() -> vec3<f32> {
+    return pow(globals.water_color.rgb, vec3<f32>(2.2)) * globals.zenith.w;
+}
+
+/// Cylindrical fog like Minecraft: horizontal distance only. Under water it
+/// is spherical and much closer, running linearly from -8 to the fog end.
 fn fog_factor(world_pos: vec3<f32>) -> f32 {
+    if globals.water.x > 0.5 {
+        let dist = distance(world_pos, globals.camera_pos.xyz);
+        return clamp((dist + 8.0) / (globals.water.y + 8.0), 0.0, 1.0);
+    }
     let dist = distance(world_pos.xz, globals.camera_pos.xz);
     return smoothstep(globals.params.x, globals.params.y, dist);
 }
 
 fn fog_color(world_pos: vec3<f32>) -> vec3<f32> {
+    if globals.water.x > 0.5 {
+        return water_fog_color();
+    }
     return sky_color(normalize(world_pos - globals.camera_pos.xyz));
 }

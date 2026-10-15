@@ -1,4 +1,4 @@
-// Layer 0 = sun, layer 1 = moon.
+// Layer 0 = sun, layer 1 = moon, layer 2 = the underwater overlay.
 @group(1) @binding(0) var celestial: texture_2d_array<f32>;
 @group(1) @binding(1) var celestial_sampler: sampler;
 
@@ -45,6 +45,10 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let daylight = globals.sun_dir.w;
     let sun = globals.sun_dir.xyz;
 
+    // Under water the sky can't be seen at all, only the water fog.
+    if globals.water.x > 0.5 {
+        return vec4<f32>(water_fog_color(), 1.0);
+    }
     var color = sky_color(dir);
     // Hide what's below the horizon, like the terrain would.
     let above = smoothstep(-0.02, 0.02, dir.y);
@@ -58,4 +62,14 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     color += celestial_body(dir, sun, 0.3, 0) * above;
     color += celestial_body(dir, -sun, 0.2, 1) * above * mix(1.0, 0.4, daylight);
     return vec4<f32>(color, 1.0);
+}
+
+/// Vanilla's underwater overlay: misc/underwater.png repeated four times
+/// across the screen at 10% opacity, sliding as the camera turns.
+@fragment
+fn fs_underwater(in: SkyOut) -> @location(0) vec4<f32> {
+    let uv = (1.0 - in.ndc) * 2.0 + globals.water.zw;
+    let texel = textureSampleLevel(celestial, celestial_sampler, fract(uv), 2, 0.0);
+    let brightness = gamma_light(light_brightness(globals.water_color.w) * globals.zenith.w);
+    return vec4<f32>(texel.rgb * brightness, texel.a * srgb_alpha(0.1));
 }

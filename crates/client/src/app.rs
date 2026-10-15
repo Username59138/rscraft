@@ -24,7 +24,7 @@ use crate::mesh::MeshData;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
-use crate::renderer::{EntityImages, Renderer};
+use crate::renderer::{EntityImages, Renderer, Underwater};
 use crate::shadows::Caster;
 use crate::selection::Selection;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
@@ -87,6 +87,8 @@ struct Session {
     /// Light on the player and what they hold, eased so shade sets in and
     /// lifts gradually instead of flickering block by block.
     player_light: f32,
+    /// Seconds the camera has been under water, for vanilla's water vision.
+    underwater_seconds: f32,
 }
 
 /// Like vanilla, spawn on dry land: search outwards from the origin in a
@@ -146,6 +148,7 @@ impl Session {
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
             player_light: 1.0,
+            underwater_seconds: 0.0,
         }
     }
 
@@ -181,6 +184,7 @@ impl Session {
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
             player_light: 1.0,
+            underwater_seconds: 0.0,
         }
     }
 
@@ -341,6 +345,33 @@ impl Session {
         }
     }
 
+    /// The underwater look when the camera is in water: vanilla's dark blue
+    /// fog that clears up from 24 to 96 blocks over 30 seconds as the eyes
+    /// adjust, plus the overlay texture's offset.
+    fn underwater(&mut self, camera: &Camera, dt: f32) -> Option<Underwater> {
+        let eye = camera.position;
+        let block = eye.floor().as_ivec3();
+        let in_water = self.chunks.block_at(block) == Some(Block::Water)
+            && (self.chunks.block_at(block + IVec3::Y) == Some(Block::Water) || eye.y.fract() < 8.0 / 9.0);
+        if !in_water || self.world.is_none() {
+            self.underwater_seconds = 0.0;
+            return None;
+        }
+        self.underwater_seconds += dt;
+        let ticks = self.underwater_seconds * 20.0;
+        let vision = (ticks / 100.0).clamp(0.0, 1.0) * 0.6 + ((ticks - 100.0) / 500.0).clamp(0.0, 1.0) * 0.4;
+        // Plains' water fog colour; as the eyes adjust it brightens towards
+        // full saturation, like vanilla's FogRenderer.
+        let base = Vec3::new(5.0, 5.0, 51.0) / 255.0;
+        let color = base.lerp(base / base.max_element(), vision);
+        Some(Underwater {
+            fog_end: 96.0 * vision.max(0.25),
+            color,
+            overlay_offset: [-camera.yaw.to_degrees() / 64.0, -camera.pitch.to_degrees() / 64.0],
+            light: self.light_at(eye),
+        })
+    }
+
     /// Mouse wheel while zooming: positive notches zoom in.
     fn scroll_zoom(&mut self, notches: f32) {
         self.zoom_level = (self.zoom_level * ZOOM_STEP.powf(notches)).clamp(MIN_ZOOM, MAX_ZOOM);
@@ -366,6 +397,8 @@ impl Session {
             head_pitch: self.camera.pitch,
             swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
             light: self.player_light,
+            swim: player.swim_amount(),
+            limb_phase: walk * 3.6,
         })
     }
 
@@ -609,6 +642,7 @@ impl State {
             jump: self.input.is_pressed(KeyCode::Space),
             sneak: self.input.is_pressed(KeyCode::ShiftLeft),
             sprint: self.input.is_pressed(KeyCode::ControlLeft),
+            look_y: self.session.camera.forward().y,
         }
     }
 
@@ -659,7 +693,10 @@ impl State {
             let feet = session.player.as_ref().filter(|_| matches!(self.screen, Screen::None)).map(PlayerController::feet);
             let chunks = &session.chunks;
             session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
-            session.particles.update(dt, &|pos| chunks.block_at(pos));
+            if let Some((at, surface, velocity)) = session.player.as_mut().and_then(|p| p.splash.take()) {
+                session.particles.water_splash(chunks.layers(), at, surface, 0.3, velocity);
+            }
+            session.particles.update(dt, session.camera.position, chunks.layers(), &|pos| chunks.block_at(pos));
         }
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
@@ -754,6 +791,7 @@ impl State {
         let chunks = &self.session.chunks;
         self.renderer.prepare_shadows(&casters, &|pos| chunks.block_at(pos));
         let camera = self.session.camera.for_perspective(perspective);
+        let underwater = self.session.underwater(&camera, dt);
         self.renderer.render(
             &camera,
             &self.session.day.state(),
@@ -766,6 +804,7 @@ impl State {
                     crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
                 })
                 .as_ref(),
+            underwater.as_ref(),
             &world_items,
             &particle_mesh,
             &held_mesh,

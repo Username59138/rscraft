@@ -36,6 +36,20 @@ struct Globals {
     horizon: [f32; 4],
     sunset: [f32; 4],
     params: [f32; 4],
+    water: [f32; 4],
+    water_color: [f32; 4],
+}
+
+/// What the view looks like with the camera under water.
+pub struct Underwater {
+    /// Distance where the water fog becomes opaque.
+    pub fog_end: f32,
+    /// Fog colour, sRGB.
+    pub color: Vec3,
+    /// Offset of the overlay texture, following the camera's rotation.
+    pub overlay_offset: [f32; 2],
+    /// Sky light at the eyes, 0..1.
+    pub light: f32,
 }
 
 /// Textures used to draw entities.
@@ -392,6 +406,7 @@ impl Renderer {
         player: Option<&[EntityVertex]>,
         hand: Option<&[EntityVertex]>,
         selection: Option<&Selection>,
+        underwater: Option<&Underwater>,
         items: &MeshData,
         particles: &MeshData,
         held: &MeshData,
@@ -429,6 +444,8 @@ impl Renderer {
             horizon: sky.horizon.extend(0.0).to_array(),
             sunset: sky.sunset_color.extend(sky.sunset).to_array(),
             params: [self.fog_end * 0.6, self.fog_end, sky::CLOUD_HEIGHT, self.cloud_extent()],
+            water: underwater.map_or([0.0; 4], |w| [1.0, w.fog_end, w.overlay_offset[0], w.overlay_offset[1]]),
+            water_color: underwater.map_or([0.0; 4], |w| w.color.extend(w.light).to_array()),
         };
         self.queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
@@ -483,7 +500,10 @@ impl Renderer {
             }
             self.player.draw_body(&mut pass);
             self.shadows.draw(&mut pass);
-            self.clouds.draw(&mut pass);
+            // Clouds can't be seen from under water.
+            if underwater.is_none() {
+                self.clouds.draw(&mut pass);
+            }
 
             // Translucent geometry goes last, over the finished opaque scene.
             pass.set_bind_group(1, &self.texture_bind_group, &[]);
@@ -494,6 +514,9 @@ impl Renderer {
             pass.set_pipeline(&self.crack_pipeline);
             self.selection.draw_crack(&mut pass);
             self.selection.draw_outline(&mut pass);
+            if underwater.is_some() {
+                self.sky.draw_underwater(&mut pass);
+            }
         }
         if self.player.has_hand() || held.is_some() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

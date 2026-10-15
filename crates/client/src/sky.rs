@@ -70,6 +70,8 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 pub struct SkyImages {
     sun: RgbaImage,
     moon: RgbaImage,
+    /// misc/underwater.png, the faint texture over the view under water.
+    underwater: RgbaImage,
     pub clouds: RgbaImage,
 }
 
@@ -84,9 +86,11 @@ impl SkyImages {
         let moon = texture("environment/celestial/moon/full_moon")
             .unwrap_or_else(|| placeholder_disc([200, 200, 210, 255]));
         let clouds = texture("environment/clouds").unwrap_or_else(|| RgbaImage::new(1, 1));
+        let underwater = texture("misc/underwater").unwrap_or_else(|| RgbaImage::new(1, 1));
         Self {
             sun: sun.resized(CELESTIAL_SIZE, CELESTIAL_SIZE),
             moon: moon.resized(CELESTIAL_SIZE, CELESTIAL_SIZE),
+            underwater: underwater.resized(CELESTIAL_SIZE, CELESTIAL_SIZE),
             clouds,
         }
     }
@@ -108,6 +112,7 @@ fn placeholder_disc(color: [u8; 4]) -> RgbaImage {
 /// Draws the sky behind everything else.
 pub struct SkyRenderer {
     pipeline: wgpu::RenderPipeline,
+    underwater_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
 }
 
@@ -120,7 +125,7 @@ impl SkyRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let celestial = upload(device, queue, "celestial", &[&images.sun, &images.moon]);
+        let celestial = upload(device, queue, "celestial", &[&images.sun, &images.moon, &images.underwater]);
         let celestial_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("celestial sampler"),
             ..Default::default()
@@ -161,8 +166,8 @@ impl SkyRenderer {
             bind_group_layouts: &[Some(globals_layout), Some(&layout)],
             ..Default::default()
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sky pipeline"),
+        let pipeline = |label, fragment, blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -172,10 +177,10 @@ impl SkyRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_sky"),
+                entry_point: Some(fragment),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -193,7 +198,18 @@ impl SkyRenderer {
             cache: None,
         });
 
-        Self { pipeline, bind_group }
+        Self {
+            pipeline: pipeline("sky pipeline", "fs_sky", wgpu::BlendState::REPLACE),
+            underwater_pipeline: pipeline("underwater overlay pipeline", "fs_underwater", wgpu::BlendState::ALPHA_BLENDING),
+            bind_group,
+        }
+    }
+
+    /// The faint moving water texture over the whole view, while under water.
+    pub fn draw_underwater(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_pipeline(&self.underwater_pipeline);
+        pass.set_bind_group(1, &self.bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// A full-screen triangle; must be drawn first.
