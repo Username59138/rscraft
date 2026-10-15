@@ -52,6 +52,11 @@ impl Camera {
         self.fov_y = degrees.to_radians();
     }
 
+    /// Width divided by height of the view.
+    pub fn aspect(&self) -> f32 {
+        self.aspect
+    }
+
     /// Vertical field of view in radians.
     pub fn fov_y(&self) -> f32 {
         self.fov_y

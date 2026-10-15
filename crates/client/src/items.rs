@@ -2,7 +2,7 @@
 //! player's inventory when they come close.
 
 use glam::{IVec3, Mat4, Vec3};
-use rscraft_world::{Block, Face};
+use rscraft_world::Block;
 
 use crate::inventory::Inventory;
 use crate::mesh::MeshData;
@@ -112,21 +112,13 @@ impl Items {
     pub fn build_mesh(&self, layers: &BlockLayers, seconds: f32, light: impl Fn(Vec3) -> f32) -> MeshData {
         let mut mesh = MeshData::default();
         for (i, (item, position)) in self.items.iter().zip(self.render_positions()).enumerate() {
-            let start = mesh.vertices.len();
-            let level = light(position);
-            for face in Face::ALL {
-                mesh.push_face(IVec3::ZERO, face, layers.get(item.block, face), [3; 4], [level; 4], 1.0);
-            }
             let phase = seconds + i as f32 * 1.7;
             let bob = (phase * 2.0).sin() * 0.05 + 0.1;
             let transform = Mat4::from_translation(position + Vec3::Y * bob)
                 * Mat4::from_rotation_y(phase)
                 * Mat4::from_scale(Vec3::splat(HALF_SIZE * 2.0))
                 * Mat4::from_translation(Vec3::splat(-0.5));
-            for v in &mut mesh.vertices[start..] {
-                v.position = transform.transform_point3(Vec3::from(v.position)).to_array();
-                v.normal = transform.transform_vector3(Vec3::from(v.normal)).normalize().to_array();
-            }
+            mesh.push_block(item.block, layers, transform, light(position));
         }
         mesh
     }

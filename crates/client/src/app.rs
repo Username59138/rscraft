@@ -19,6 +19,7 @@ use crate::input::Input;
 use crate::inventory::{Inventory, ItemStack};
 use crate::inventory_screen::{self, InventoryAction};
 use crate::items::Items;
+use crate::mesh::MeshData;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
@@ -330,6 +331,7 @@ impl Session {
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
             light: self.light_at(player.eye()),
+            aspect: self.camera.aspect(),
             fov_y: self.camera.fov_y() / self.zoom_fov,
         })
     }
@@ -664,9 +666,24 @@ impl State {
         let player_mesh = (perspective != Perspective::FirstPerson)
             .then(|| self.session.pose().map(|pose| player::build_mesh(&pose)))
             .flatten();
-        let hand_mesh = (perspective == Perspective::FirstPerson)
-            .then(|| self.session.hand().map(|hand| player::build_hand_mesh(&hand)))
-            .flatten();
+        // Like vanilla, a held block replaces the bare hand in first person
+        // and sits in Steve's right hand in third person.
+        let held_block = self.in_world().then(|| self.session.inventory.selected_stack()).flatten().map(|s| s.block);
+        let mut world_items = self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p));
+        let mut held_mesh = MeshData::default();
+        let mut hand_mesh = None;
+        if let (Some(hand), Some(pose)) = (self.session.hand(), self.session.pose()) {
+            match (perspective, held_block) {
+                (Perspective::FirstPerson, Some(block)) => {
+                    held_mesh.push_block(block, &self.layers, player::held_block_first_person(&hand), hand.light);
+                }
+                (Perspective::FirstPerson, None) => hand_mesh = Some(player::build_hand_mesh(&hand)),
+                (_, Some(block)) => {
+                    world_items.push_block(block, &self.layers, player::held_block_third_person(&pose), pose.light);
+                }
+                (_, None) => {}
+            }
+        }
         // Shadows: dropped items always, the player only when visible (F5).
         let mut casters: Vec<Caster> = self.session.items.shadow_casters().collect();
         if let Some(player) = &self.session.player
@@ -689,7 +706,8 @@ impl State {
                     crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
                 })
                 .as_ref(),
-            &self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p)),
+            &world_items,
+            &held_mesh,
             &self.ui.vertices,
             [self.ui.width, self.ui.height],
         );

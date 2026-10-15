@@ -390,12 +390,14 @@ impl Renderer {
         hand: Option<&[EntityVertex]>,
         selection: Option<&Selection>,
         items: &MeshData,
+        held: &MeshData,
         ui: &[UiVertex],
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
         self.selection.prepare(&self.device, &self.queue, selection, self.size());
         let items = GpuMesh::upload(&self.device, items);
+        let held = GpuMesh::upload(&self.device, held);
         self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
 
@@ -484,7 +486,7 @@ impl Renderer {
             self.selection.draw_crack(&mut pass);
             self.selection.draw_outline(&mut pass);
         }
-        if self.player.has_hand() {
+        if self.player.has_hand() || held.is_some() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hand pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -502,6 +504,11 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
             self.player.draw_hand(&mut pass);
+            if let Some(held) = &held {
+                pass.set_pipeline(&self.solid_pipeline);
+                pass.set_bind_group(1, &self.texture_bind_group, &[]);
+                held.draw(&mut pass);
+            }
         }
         let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.ui.format()),

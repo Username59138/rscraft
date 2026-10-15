@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glam::IVec3;
+use glam::{IVec3, Mat4, Vec3};
 use rscraft_world::{Block, ColumnGroup, Face, LightRegion, MAX_LIGHT, RenderLayer, SECTION_SIZE, Section};
 
 use crate::texture::BlockLayers;
@@ -97,6 +97,21 @@ impl MeshData {
             self.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         } else {
             self.indices.extend_from_slice(&[base + 1, base + 2, base + 3, base + 1, base + 3, base]);
+        }
+    }
+}
+
+impl MeshData {
+    /// Appends a whole block as a cube: `transform` places the unit cube
+    /// 0..1, and the block is lit evenly with sky light `light` (0..1).
+    pub fn push_block(&mut self, block: Block, layers: &BlockLayers, transform: Mat4, light: f32) {
+        let start = self.vertices.len();
+        for face in Face::ALL {
+            self.push_face(IVec3::ZERO, face, layers.get(block, face), [3; 4], [light; 4], 1.0);
+        }
+        for v in &mut self.vertices[start..] {
+            v.position = transform.transform_point3(Vec3::from(v.position)).to_array();
+            v.normal = transform.transform_vector3(Vec3::from(v.normal)).normalize().to_array();
         }
     }
 }
