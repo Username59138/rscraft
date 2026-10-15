@@ -149,13 +149,15 @@ mod tests {
 
     fn run(world: &mut TestWorld, ticks: u32, darken: u8) {
         let mut random = RandomTicks::new(42);
-        for _ in 0..ticks {
-            for x in -1..=1 {
-                for z in -1..=1 {
-                    let section = IVec3::new(x, 0, z);
-                    let blocks = section_of(world, section);
-                    random.tick_section(world, section, &blocks, darken);
-                }
+        let positions: Vec<IVec3> = (-1..=1).flat_map(|x| (-1..=1).map(move |z| IVec3::new(x, 0, z))).collect();
+        let mut sections = Vec::new();
+        for tick in 0..ticks {
+            // Snapshots may be a little outdated, like in the game.
+            if tick % 100 == 0 {
+                sections = positions.iter().map(|&p| section_of(world, p)).collect();
+            }
+            for (&pos, blocks) in positions.iter().zip(&sections) {
+                random.tick_section(world, pos, blocks, darken);
             }
         }
     }
