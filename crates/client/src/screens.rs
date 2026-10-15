@@ -3,9 +3,9 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::gamemode::GameMode;
 use crate::saves::{self, Options, WorldEntry};
 use crate::ui::{GRAY, Rect, Sprite, Ui, WHITE};
+use rscraft_world::gamemode::GameMode;
 
 const DARK_GRAY: u32 = 0x808080;
 const ENTRY_HEIGHT: f32 = 36.0;

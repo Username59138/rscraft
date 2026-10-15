@@ -1,6 +1,6 @@
 //! The player's inventory: 9 hotbar slots followed by 27 main slots, like vanilla.
 
-use rscraft_world::Block;
+use crate::Block;
 
 pub const SLOTS: usize = 36;
 pub const HOTBAR: usize = 9;

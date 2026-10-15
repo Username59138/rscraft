@@ -2,9 +2,9 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::crafting::{self, Grid};
-use crate::inventory::{self as inv, HOTBAR, Inventory, ItemStack, SLOTS};
 use crate::ui::{Rect, Sprite, Ui};
+use rscraft_world::crafting::{self, Grid};
+use rscraft_world::inventory::{self as inv, HOTBAR, Inventory, ItemStack, SLOTS};
 
 const WIDTH: f32 = 176.0;
 const HEIGHT: f32 = 166.0;

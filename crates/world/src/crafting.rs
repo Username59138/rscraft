@@ -1,6 +1,6 @@
 //! The 2×2 crafting grid in the inventory and its recipes.
 
-use rscraft_world::Block;
+use crate::Block;
 
 use crate::inventory::{Inventory, ItemStack, MAX_STACK};
 

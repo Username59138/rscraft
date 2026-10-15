@@ -2,10 +2,9 @@
 //! constants for walking, sprinting, jumping, swimming and flying, and
 //! axis-by-axis collision against block boxes.
 
+use crate::{Block, TICK_SECONDS};
 use glam::{IVec3, Vec2, Vec3};
-use rscraft_world::Block;
 
-pub const TICK_SECONDS: f32 = 0.05;
 const HALF_WIDTH: f32 = 0.3;
 const HEIGHT: f32 = 1.8;
 pub const EYE_HEIGHT: f32 = 1.62;

@@ -13,19 +13,14 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::camera::{Camera, Perspective};
 use crate::chunks::{ChunkManager, Edits};
-use crate::crafting::Grid;
 use crate::debug::{self, DebugInfo};
-use crate::gamemode::GameMode;
 use crate::hud;
 use crate::input::Input;
-use crate::inventory::{Inventory, ItemStack};
 use crate::inventory_screen::{self, InventoryAction};
-use crate::items::Items;
+use crate::item_render;
 use crate::mesh::MeshData;
-use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
 use crate::particles::Particles;
 use crate::player::{self, HandPose, PlayerPose};
-use crate::raycast::{Hit, REACH, raycast};
 use crate::renderer::{EntityImages, Frame, GuiFrame, PREVIEW_DEPTH, Preview, Renderer, Underwater};
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
@@ -35,6 +30,13 @@ use crate::sky::{DayCycle, SkyImages};
 use crate::switcher;
 use crate::texture::{BlockImages, BlockLayers};
 use crate::ui::{GuiAtlas, Rect, Sprite, Ui};
+use rscraft_world::TICK_SECONDS;
+use rscraft_world::crafting::Grid;
+use rscraft_world::dropped_items::DroppedItems;
+use rscraft_world::gamemode::GameMode;
+use rscraft_world::inventory::{Inventory, ItemStack};
+use rscraft_world::movement::{Controls, EYE_HEIGHT, PlayerController};
+use rscraft_world::raycast::{Hit, REACH, raycast};
 
 /// World shown behind the title screen.
 const MENU_SEED: u32 = 1337;
@@ -74,7 +76,7 @@ struct Session {
     cursor: Option<ItemStack>,
     /// The inventory's 2×2 crafting grid.
     crafting: Grid,
-    items: Items,
+    items: DroppedItems,
     particles: Particles,
     hit_particle_timer: f32,
     /// Block being broken and how far along it is (0..1).
@@ -147,7 +149,7 @@ impl Session {
             inventory: Inventory::default(),
             cursor: None,
             crafting: Grid::default(),
-            items: Items::default(),
+            items: DroppedItems::default(),
             particles: Particles::default(),
             hit_particle_timer: 0.0,
             breaking: None,
@@ -187,7 +189,7 @@ impl Session {
             inventory,
             cursor: None,
             crafting: Grid::default(),
-            items: Items::default(),
+            items: DroppedItems::default(),
             particles: Particles::default(),
             hit_particle_timer: 0.0,
             breaking: None,
@@ -919,8 +921,9 @@ impl State {
         // First person shows what the switching animation says it holds.
         let shown_block = self.session.shown_item;
         let player_feet = self.session.player.as_ref().map(PlayerController::feet);
-        let mut world_items =
-            self.session.items.build_mesh(&self.layers, seconds, player_feet, |p| self.session.light_at(p));
+        let mut world_items = item_render::build_mesh(&self.session.items, &self.layers, seconds, player_feet, |p| {
+            self.session.light_at(p)
+        });
         let view_camera = self.session.camera.for_perspective(perspective);
         let particle_mesh = self.session.particles.build_mesh(
             view_camera.right(),
@@ -943,7 +946,7 @@ impl State {
             }
         }
         // Shadows: dropped items always, the player only when visible (F5).
-        let mut casters: Vec<Caster> = self.session.items.shadow_casters().collect();
+        let mut casters: Vec<Caster> = item_render::shadow_casters(&self.session.items).collect();
         if let Some(player) = &self.session.player
             && perspective != Perspective::FirstPerson
             && !spectator

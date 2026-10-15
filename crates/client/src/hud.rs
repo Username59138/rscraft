@@ -1,7 +1,7 @@
 //! The in-game overlay: the hotbar.
 
-use crate::inventory::{HOTBAR, Inventory};
 use crate::ui::{Rect, Sprite, Ui};
+use rscraft_world::inventory::{HOTBAR, Inventory};
 
 /// Draws the hotbar at the bottom of the screen, like vanilla.
 pub fn hotbar(ui: &mut Ui, inventory: &Inventory) {

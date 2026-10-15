@@ -12,8 +12,8 @@ use rscraft_world::Block;
 use serde::{Deserialize, Serialize};
 
 use crate::chunks::Edits;
-use crate::gamemode::GameMode;
-use crate::inventory::{HOTBAR, Inventory, ItemStack, MAX_STACK};
+use rscraft_world::gamemode::GameMode;
+use rscraft_world::inventory::{HOTBAR, Inventory, ItemStack, MAX_STACK};
 
 fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("rscraft")

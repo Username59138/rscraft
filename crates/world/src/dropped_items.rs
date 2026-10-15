@@ -1,17 +1,13 @@
-//! Items lying in the world: they fall, bob and spin, and fly into the
-//! player's inventory when they come close.
+//! Items lying in the world: they fall and fly into the player's inventory
+//! when they come close. Drawing them is up to the client.
 
-use glam::{IVec3, Mat4, Vec3};
-use rscraft_world::Block;
+use glam::{IVec3, Vec3};
 
 use crate::inventory::Inventory;
-use crate::mesh::MeshData;
-use crate::movement::TICK_SECONDS;
-use crate::shadows::Caster;
-use crate::texture::BlockLayers;
+use crate::{Block, TICK_SECONDS};
 
-/// Half the size of the dropped block cube (vanilla draws them at 1/4 scale).
-const HALF_SIZE: f32 = 0.125;
+/// Half the size of a dropped item's box (vanilla draws them at 1/4 scale).
+pub const HALF_SIZE: f32 = 0.125;
 const GRAVITY: f32 = 0.04;
 const PICKUP_RANGE: f32 = 1.5;
 /// Items can't be picked up for 10 ticks after they appear, like vanilla.
@@ -20,6 +16,8 @@ const PICKUP_DELAY: f32 = 0.5;
 const LIFETIME: f32 = 300.0;
 /// Picked-up items fly into the player over 3 ticks (ItemPickupParticle).
 const PICKUP_SECONDS: f32 = 3.0 * TICK_SECONDS;
+/// Picked-up items fly to this height above the player's feet.
+const PICKUP_TARGET_HEIGHT: f32 = 0.5;
 
 /// A picked-up item on its way into the player; already in the inventory.
 struct Pickup {
@@ -40,7 +38,7 @@ struct DroppedItem {
 }
 
 #[derive(Default)]
-pub struct Items {
+pub struct DroppedItems {
     items: Vec<DroppedItem>,
     pickups: Vec<Pickup>,
     accumulator: f32,
@@ -52,7 +50,7 @@ fn jitter(seed: f32) -> f32 {
     ((seed * 12.9898).sin() * 43758.547).rem_euclid(1.0) * 2.0 - 1.0
 }
 
-impl Items {
+impl DroppedItems {
     /// Drops an item at the centre of a block, with a little random hop.
     pub fn spawn_at_block(&mut self, pos: IVec3, block: Block, count: u8) {
         let seed = (pos.x * 73 + pos.y * 19 + pos.z * 31 + self.items.len() as i32) as f32;
@@ -127,51 +125,21 @@ impl Items {
         self.accumulator / TICK_SECONDS
     }
 
-    /// Where every item is drawn this frame, between its last two ticks.
-    fn render_positions(&self) -> impl Iterator<Item = Vec3> + '_ {
+    /// Every item lying in the world and where to draw it this frame,
+    /// between its last two ticks.
+    pub fn visible(&self) -> impl Iterator<Item = (Block, Vec3)> + '_ {
         let alpha = self.alpha();
-        self.items.iter().map(move |item| item.previous.lerp(item.position, alpha))
+        self.items.iter().map(move |item| (item.block, item.previous.lerp(item.position, alpha)))
     }
 
-    /// Shadow casters for every item, like vanilla's (radius 0.15, strength 0.75).
-    pub fn shadow_casters(&self) -> impl Iterator<Item = Caster> + '_ {
-        self.render_positions().map(|p| Caster { feet: p - Vec3::Y * HALF_SIZE, radius: 0.15, strength: 0.75 })
-    }
-
-    /// Spinning, bobbing cubes, ready to draw with the solid block pipeline.
-    /// `light` gives the sky light level (0..1) at a position.
-    /// `player` is where picked-up items fly to (the player's feet).
-    pub fn build_mesh(
-        &self,
-        layers: &BlockLayers,
-        seconds: f32,
-        player: Option<Vec3>,
-        light: impl Fn(Vec3) -> f32,
-    ) -> MeshData {
-        let mut mesh = MeshData::default();
-        if let Some(feet) = player {
-            // Vanilla eases in quadratically towards the middle of the player.
-            let target = feet + Vec3::Y * 0.5;
-            for pickup in &self.pickups {
-                let t = (pickup.elapsed / PICKUP_SECONDS).min(1.0);
-                let position = pickup.from.lerp(target, t * t);
-                let transform = Mat4::from_translation(position)
-                    * Mat4::from_rotation_y(seconds)
-                    * Mat4::from_scale(Vec3::splat(HALF_SIZE * 2.0))
-                    * Mat4::from_translation(Vec3::splat(-0.5));
-                mesh.push_block(pickup.block, layers, transform, light(position));
-            }
-        }
-        for (i, (item, position)) in self.items.iter().zip(self.render_positions()).enumerate() {
-            let phase = seconds + i as f32 * 1.7;
-            let bob = (phase * 2.0).sin() * 0.05 + 0.1;
-            let transform = Mat4::from_translation(position + Vec3::Y * bob)
-                * Mat4::from_rotation_y(phase)
-                * Mat4::from_scale(Vec3::splat(HALF_SIZE * 2.0))
-                * Mat4::from_translation(Vec3::splat(-0.5));
-            mesh.push_block(item.block, layers, transform, light(position));
-        }
-        mesh
+    /// Picked-up items flying into the player at `feet`, and where they are
+    /// now. Vanilla eases them in quadratically towards the middle of the player.
+    pub fn flying_to(&self, feet: Vec3) -> impl Iterator<Item = (Block, Vec3)> + '_ {
+        let target = feet + Vec3::Y * PICKUP_TARGET_HEIGHT;
+        self.pickups.iter().map(move |pickup| {
+            let t = (pickup.elapsed / PICKUP_SECONDS).min(1.0);
+            (pickup.block, pickup.from.lerp(target, t * t))
+        })
     }
 }
 

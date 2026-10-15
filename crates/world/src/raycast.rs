@@ -1,7 +1,7 @@
 //! Finding the block under the crosshair.
 
+use crate::Block;
 use glam::{IVec3, Vec3};
-use rscraft_world::Block;
 
 /// Survival reach, like vanilla.
 pub const REACH: f32 = 4.5;

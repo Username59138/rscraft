@@ -2,8 +2,8 @@
 
 use rscraft_world::Block;
 
-use crate::gamemode::GameMode;
 use crate::ui::{Rect, Sprite, Ui, WHITE};
+use rscraft_world::gamemode::GameMode;
 
 const AQUA: u32 = 0x55ffff;
 const SLOT: f32 = 26.0;

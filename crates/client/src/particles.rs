@@ -6,8 +6,8 @@ use glam::{IVec3, Vec3};
 use rscraft_world::{Block, Face};
 
 use crate::mesh::{MeshData, Vertex};
-use crate::movement::TICK_SECONDS;
 use crate::texture::{BlockLayers, SPLASH_FRAMES};
+use rscraft_world::TICK_SECONDS;
 
 /// Particles alive at once; the oldest go first.
 const MAX_PARTICLES: usize = 6000;
