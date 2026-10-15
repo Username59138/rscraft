@@ -369,7 +369,7 @@ impl Renderer {
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
-        self.selection.prepare(&self.device, &self.queue, selection);
+        self.selection.prepare(&self.device, &self.queue, selection, self.size());
         let items = GpuMesh::upload(&self.device, items);
         self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
