@@ -5,6 +5,7 @@ mod clouds;
 mod crafting;
 mod debug;
 mod frustum;
+mod gamemode;
 mod hud;
 mod inventory;
 mod inventory_screen;
@@ -21,6 +22,7 @@ mod selection;
 mod shadows;
 mod screens;
 mod sky;
+mod switcher;
 mod texture;
 mod ui;
 
@@ -47,7 +49,7 @@ fn main() {
     let sky_images = sky::SkyImages::load(jar.as_mut());
     let icons: Vec<_> = rscraft_world::Block::ALL
         .into_iter()
-        .filter(|b| b.drop() == Some(*b))
+        .filter(|b| b.is_targetable())
         .map(|b| (b, block_images.icon_faces(b)))
         .collect();
     let atlas = ui::GuiAtlas::load(jar.as_mut(), &icons);

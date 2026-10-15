@@ -31,10 +31,16 @@ pub enum Sprite {
     Hotbar,
     HotbarSelection,
     InventoryScreen,
+    GameModeSwitcher,
+    SwitcherSlot,
+    SwitcherSelection,
+    IronSword,
+    Map,
+    EnderEye,
 }
 
 impl Sprite {
-    const ALL: [Sprite; 18] = [
+    const ALL: [Sprite; 24] = [
         Sprite::White,
         Sprite::Button,
         Sprite::ButtonHighlighted,
@@ -53,6 +59,12 @@ impl Sprite {
         Sprite::Hotbar,
         Sprite::HotbarSelection,
         Sprite::InventoryScreen,
+        Sprite::GameModeSwitcher,
+        Sprite::SwitcherSlot,
+        Sprite::SwitcherSelection,
+        Sprite::IronSword,
+        Sprite::Map,
+        Sprite::EnderEye,
     ];
 
     /// Path under `assets/minecraft/textures/`.
@@ -76,6 +88,12 @@ impl Sprite {
             Sprite::Hotbar => "gui/sprites/hud/hotbar",
             Sprite::HotbarSelection => "gui/sprites/hud/hotbar_selection",
             Sprite::InventoryScreen => "gui/container/inventory",
+            Sprite::GameModeSwitcher => "gui/container/gamemode_switcher",
+            Sprite::SwitcherSlot => "gui/sprites/gamemode_switcher/slot",
+            Sprite::SwitcherSelection => "gui/sprites/gamemode_switcher/selection",
+            Sprite::IronSword => "item/iron_sword",
+            Sprite::Map => "item/map",
+            Sprite::EnderEye => "item/ender_eye",
         })
     }
 }

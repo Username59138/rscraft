@@ -25,12 +25,14 @@ use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
 use crate::crafting::Grid;
+use crate::gamemode::GameMode;
 use crate::renderer::{EntityImages, PREVIEW_DEPTH, Preview, Renderer, Underwater};
 use crate::shadows::Caster;
 use crate::selection::Selection;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
 use crate::sky::{DayCycle, SkyImages};
+use crate::switcher;
 use crate::texture::{BlockImages, BlockLayers};
 use crate::ui::{GuiAtlas, Rect, Sprite, Ui};
 
@@ -65,6 +67,8 @@ struct Session {
     world: Option<WorldEntry>,
     /// The player; None for the title backdrop.
     player: Option<PlayerController>,
+    game_mode: GameMode,
+    previous_game_mode: Option<GameMode>,
     inventory: Inventory,
     /// The stack held by the mouse in the inventory screen.
     cursor: Option<ItemStack>,
@@ -138,6 +142,8 @@ impl Session {
             day: DayCycle { time: time_override().unwrap_or(0.15) },
             world: None,
             player: None,
+            game_mode: GameMode::Survival,
+            previous_game_mode: None,
             inventory: Inventory::default(),
             cursor: None,
             crafting: Grid::default(),
@@ -169,12 +175,15 @@ impl Session {
         camera.set_fov(options.fov);
         let inventory = entry.save.player.as_ref().map(PlayerSave::load_inventory).unwrap_or_default();
         let edits = entry.read_edits();
-        Self {
+        let (game_mode, previous_game_mode) = (entry.save.game_mode, entry.save.previous_game_mode);
+        let mut session = Self {
             chunks: ChunkManager::new(generator, layers.clone(), options.render_distance, edits),
             day: DayCycle { time: time_override().unwrap_or(entry.save.time_of_day) },
             camera,
             world: Some(entry),
             player: Some(player),
+            game_mode,
+            previous_game_mode,
             inventory,
             cursor: None,
             crafting: Grid::default(),
@@ -192,7 +201,9 @@ impl Session {
             zoom_level: DEFAULT_ZOOM,
             player_light: 1.0,
             underwater_seconds: 0.0,
-        }
+        };
+        session.apply_game_mode();
+        session
     }
 
     fn save(&mut self) {
@@ -211,6 +222,8 @@ impl Session {
             log::error!("{err:#}");
         }
         world.save.time_of_day = self.day.time;
+        world.save.game_mode = self.game_mode;
+        world.save.previous_game_mode = self.previous_game_mode;
         world.save.last_played = saves::now();
         match world.write() {
             Ok(()) => log::info!("saved world {}", world.save.name),
@@ -272,10 +285,36 @@ impl Session {
         }
     }
 
+    /// Switches game mode, remembering the old one for F3+F4.
+    fn set_game_mode(&mut self, mode: GameMode) {
+        if mode != self.game_mode {
+            self.previous_game_mode = Some(self.game_mode);
+            self.game_mode = mode;
+        }
+        self.apply_game_mode();
+    }
+
+    /// Tells the player's movement what the game mode allows.
+    fn apply_game_mode(&mut self) {
+        let mode = self.game_mode;
+        if let Some(player) = &mut self.player {
+            player.may_fly = mode.may_fly();
+            player.noclip = mode.is_spectator();
+            if !mode.may_fly() {
+                player.flying = false;
+            }
+        }
+    }
+
     /// Breaking and placing blocks with the mouse buttons held. Returns the
     /// block under the crosshair and its breaking progress.
     fn interact(&mut self, dt: f32, attack: bool, use_item: bool) -> Option<(Hit, f32)> {
         let eye = self.player.as_ref()?.eye();
+        // Spectators can't touch the world; no outline either.
+        if self.game_mode.is_spectator() {
+            self.breaking = None;
+            return None;
+        }
         self.break_cooldown = (self.break_cooldown - dt).max(0.0);
         self.place_cooldown = (self.place_cooldown - dt).max(0.0);
         let chunks = &self.chunks;
@@ -290,7 +329,18 @@ impl Session {
         if attack && self.swing == 0.0 {
             self.start_swing();
         }
-        match (attack, target.break_seconds()) {
+        let mode = self.game_mode;
+        let attack = attack && mode.may_build();
+        // Creative breaks anything at once, bedrock included, dropping nothing.
+        if mode.is_creative() {
+            if attack && self.break_cooldown == 0.0 && target != Block::Air {
+                self.chunks.set_block(hit.block, Block::Air);
+                self.particles.block_broken(hit.block, target, self.chunks.layers());
+                self.break_cooldown = 0.25;
+            }
+            self.breaking = None;
+        }
+        match (attack && !mode.is_creative(), target.break_seconds()) {
             (true, Some(seconds)) if self.break_cooldown == 0.0 => {
                 let progress = match self.breaking {
                     Some((pos, progress)) if pos == hit.block => progress,
@@ -318,7 +368,7 @@ impl Session {
             _ => self.breaking = None,
         }
 
-        if use_item && self.place_cooldown == 0.0 && hit.normal != IVec3::ZERO {
+        if use_item && mode.may_build() && self.place_cooldown == 0.0 && hit.normal != IVec3::ZERO {
             let pos = hit.block + hit.normal;
             let free = matches!(self.chunks.block_at(pos), Some(Block::Air | Block::Water));
             let blocked = self.player.as_ref().is_some_and(|p| p.intersects_block(pos));
@@ -326,7 +376,10 @@ impl Session {
                 && let Some(stack) = self.inventory.selected_stack()
             {
                 self.chunks.set_block(pos, stack.block);
-                self.inventory.take_selected();
+                // Creative placing doesn't use up items.
+                if !mode.is_creative() {
+                    self.inventory.take_selected();
+                }
                 self.start_swing();
                 // Vanilla repeats placement every 4 ticks while held.
                 self.place_cooldown = 0.2;
@@ -470,6 +523,11 @@ struct State {
     input: Input,
     perspective: Perspective,
     show_debug: bool,
+    /// F3 was used together with another key, so releasing it won't toggle
+    /// the debug screen.
+    f3_combo: bool,
+    /// The F3+F4 game mode switcher's selection, while it's open.
+    switcher: Option<GameMode>,
     mouse_grabbed: bool,
     quit: bool,
     started: Instant,
@@ -527,6 +585,8 @@ impl ApplicationHandler for App {
             input: Input::default(),
             perspective: Perspective::FirstPerson,
             show_debug: false,
+            f3_combo: false,
+            switcher: None,
             mouse_grabbed: false,
             quit: false,
             started: Instant::now(),
@@ -556,6 +616,8 @@ impl ApplicationHandler for App {
                 state.input.set_key(code, pressed);
                 if pressed {
                     state.key_pressed(code, event.text.as_deref());
+                } else if code == KeyCode::F3 {
+                    state.f3_released();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -657,7 +719,20 @@ impl State {
         if self.playing() {
             match code {
                 KeyCode::Escape => self.open(Screen::Pause),
-                KeyCode::F3 => self.show_debug = !self.show_debug,
+                // F3 toggles the debug screen on release, unless used in a combo.
+                KeyCode::F3 => self.f3_combo = false,
+                // F3+F4: open the game mode switcher, then cycle through it.
+                KeyCode::F4 if self.input.is_pressed(KeyCode::F3) => {
+                    self.f3_combo = true;
+                    let session = &self.session;
+                    self.switcher = Some(match self.switcher {
+                        Some(selected) => selected.next(),
+                        // Vanilla offers the previous mode first.
+                        None => session.previous_game_mode.filter(|&m| m != session.game_mode).unwrap_or(
+                            if session.game_mode == GameMode::Creative { GameMode::Survival } else { GameMode::Creative },
+                        ),
+                    });
+                }
                 KeyCode::F5 => self.perspective = self.perspective.next(),
                 KeyCode::KeyE => self.open(Screen::Inventory),
                 KeyCode::KeyQ => {
@@ -689,6 +764,17 @@ impl State {
             sprint: self.input.is_pressed(KeyCode::ControlLeft),
             look_y: self.session.camera.forward().y,
         }
+    }
+
+    /// Releasing F3 applies the switcher's choice, or toggles the debug
+    /// screen if F3 was pressed on its own.
+    fn f3_released(&mut self) {
+        if let Some(mode) = self.switcher.take() {
+            self.session.set_game_mode(mode);
+        } else if !self.f3_combo && self.playing() {
+            self.show_debug = !self.show_debug;
+        }
+        self.f3_combo = false;
     }
 
     fn open(&mut self, screen: Screen) {
@@ -739,7 +825,8 @@ impl State {
         // Items and particles run with the world, inventory open or not.
         if self.world_running() {
             let session = &mut self.session;
-            let feet = session.player.as_ref().map(PlayerController::feet);
+            // Spectators don't pick items up.
+            let feet = session.player.as_ref().filter(|_| !session.game_mode.is_spectator()).map(PlayerController::feet);
             let chunks = &session.chunks;
             session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
             if let Some((at, surface, velocity)) = session.player.as_mut().and_then(|p| p.splash.take()) {
@@ -762,11 +849,13 @@ impl State {
         let (width, height) = self.renderer.size();
         let scale = self.gui_scale();
         self.ui.begin(width, height, scale, dt);
-        if self.playing() && self.perspective == Perspective::FirstPerson {
+        let spectator = self.session.game_mode.is_spectator();
+        // Spectators get no crosshair, hotbar, hand or body, like vanilla.
+        if self.playing() && self.perspective == Perspective::FirstPerson && !spectator {
             let (cx, cy) = ((self.ui.width / 2.0).floor(), (self.ui.height / 2.0).floor());
             self.ui.sprite_inverted(Sprite::Crosshair, Rect::new(cx - 7.0, cy - 7.0, 15.0, 15.0));
         }
-        if self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
+        if self.in_world() && !matches!(self.screen, Screen::Loading { .. }) && !spectator {
             hud::hotbar(&mut self.ui, &self.session.inventory);
         }
         if self.show_debug && self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
@@ -796,12 +885,16 @@ impl State {
                 self.open(Screen::None);
             }
         }
+        if let Some(selected) = self.switcher {
+            switcher::draw(&mut self.ui, selected);
+        }
         let action = screens::draw(&mut self.screen, &mut self.ui, &mut self.options);
         self.apply(action);
 
         // World.
         let perspective = if self.in_world() { self.perspective } else { Perspective::FirstPerson };
-        let player_mesh = (perspective != Perspective::FirstPerson)
+        let spectator = self.session.game_mode.is_spectator();
+        let player_mesh = (perspective != Perspective::FirstPerson && !spectator)
             .then(|| self.session.pose().map(|pose| player::build_mesh(&pose)))
             .flatten();
         // Like vanilla, a held block replaces the bare hand in first person
@@ -820,7 +913,7 @@ impl State {
         );
         let mut held_mesh = MeshData::default();
         let mut hand_mesh = None;
-        if let (Some(hand), Some(pose)) = (self.session.hand(), self.session.pose()) {
+        if let (Some(hand), Some(pose), false) = (self.session.hand(), self.session.pose(), spectator) {
             let in_hand = if perspective == Perspective::FirstPerson { shown_block } else { held_block };
             match (perspective, in_hand) {
                 (Perspective::FirstPerson, Some(block)) => {
@@ -837,6 +930,7 @@ impl State {
         let mut casters: Vec<Caster> = self.session.items.shadow_casters().collect();
         if let Some(player) = &self.session.player
             && perspective != Perspective::FirstPerson
+            && !spectator
         {
             casters.push(Caster { feet: player.feet(), radius: 0.5, strength: 1.0 });
         }

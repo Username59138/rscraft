@@ -81,6 +81,10 @@ pub struct PlayerController {
     /// Bumped into a wall during the last move.
     horizontal_collision: bool,
     pub flying: bool,
+    /// Set from the game mode: flying can be toggled (creative), and
+    /// moving straight through blocks while always flying (spectator).
+    pub may_fly: bool,
+    pub noclip: bool,
     pub sprinting: bool,
     pub sneaking: bool,
     /// Sprint-swimming: lying flat and moving where the player looks.
@@ -117,6 +121,8 @@ impl PlayerController {
             on_ground: false,
             horizontal_collision: false,
             flying,
+            may_fly: true,
+            noclip: false,
             sprinting: false,
             sneaking: false,
             swimming: false,
@@ -213,7 +219,7 @@ impl PlayerController {
         // Double-tapping jump toggles flying.
         let jump_pressed = controls.jump && !self.jump_held;
         self.jump_held = controls.jump;
-        if jump_pressed {
+        if jump_pressed && self.may_fly && !self.noclip {
             if self.last_jump_press.is_some_and(|t| self.ticks - t <= DOUBLE_TAP_TICKS) {
                 self.flying = !self.flying;
                 self.last_jump_press = None;
@@ -222,6 +228,11 @@ impl PlayerController {
             }
         }
 
+        if self.noclip {
+            self.flying = true;
+        } else if !self.may_fly {
+            self.flying = false;
+        }
         self.sneaking = controls.sneak && !self.flying && !self.swimming;
         self.sprinting = controls.sprint && controls.forward > 0.0 && !self.sneaking;
         self.in_water = world((self.position + Vec3::Y * 0.4).floor().as_ivec3()) == Some(Block::Water);
@@ -262,7 +273,7 @@ impl PlayerController {
             }
             self.move_by(world);
             self.velocity *= Vec3::new(0.91, 0.6, 0.91);
-            if self.on_ground {
+            if self.on_ground && !self.noclip {
                 self.flying = false;
             }
         } else if self.in_water {
@@ -322,7 +333,7 @@ impl PlayerController {
         // Falling into water makes a splash.
         let was_touching = self.touching_water;
         self.touching_water = Self::touches_water(&self.aabb(), world);
-        if self.touching_water && !was_touching && self.ticks > 1 {
+        if self.touching_water && !was_touching && self.ticks > 1 && !self.noclip {
             let surface = self.water_surface(world).unwrap_or(self.position.y);
             self.splash = Some((self.position, surface, self.velocity));
         }
@@ -340,7 +351,9 @@ impl PlayerController {
     fn update_swimming(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         let eye = self.position + Vec3::Y * self.eye_height;
         let eye_in_water = world(eye.floor().as_ivec3()) == Some(Block::Water);
-        let want = if self.swimming {
+        let want = if self.noclip {
+            false
+        } else if self.swimming {
             self.sprinting && self.in_water && !self.flying
         } else {
             self.sprinting && eye_in_water && self.in_water && !self.flying
@@ -387,6 +400,13 @@ impl PlayerController {
 
     /// Moves by the current velocity, sliding along whatever is in the way.
     fn move_by(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
+        // Spectators pass straight through everything.
+        if self.noclip {
+            self.position += self.velocity;
+            self.on_ground = false;
+            self.horizontal_collision = false;
+            return;
+        }
         let mut d = self.velocity;
         let start = self.aabb();
 
@@ -467,6 +487,24 @@ mod tests {
             player.tick(controls, 0.0, &world);
         }
         (player.position - start).length()
+    }
+
+    #[test]
+    fn spectators_fly_through_blocks_and_survival_cannot_fly() {
+        let stone = |_: IVec3| Some(Block::Stone);
+        let mut spectator = PlayerController::new(Vec3::new(0.5, 10.0, 0.5), false);
+        spectator.noclip = true;
+        let forward = Controls { forward: 1.0, ..Default::default() };
+        for _ in 0..20 {
+            spectator.tick(forward, 0.0, &stone);
+        }
+        assert!(spectator.flying && spectator.position.z < -0.5, "{:?}", spectator.position);
+
+        let air = |p: IVec3| Some(if p.y < 0 { Block::Stone } else { Block::Air });
+        let mut survival = PlayerController::new(Vec3::new(0.5, 5.0, 0.5), true);
+        survival.may_fly = false;
+        survival.tick(Controls::default(), 0.0, &air);
+        assert!(!survival.flying);
     }
 
     #[test]

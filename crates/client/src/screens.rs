@@ -3,6 +3,7 @@
 
 use winit::keyboard::KeyCode;
 
+use crate::gamemode::GameMode;
 use crate::saves::{self, Options, WorldEntry};
 use crate::ui::{GRAY, Rect, Sprite, Ui, WHITE};
 
@@ -17,7 +18,7 @@ pub enum Screen {
     None,
     Title,
     SelectWorld(SelectWorld),
-    CreateWorld { name: String, seed: String },
+    CreateWorld { name: String, seed: String, mode: GameMode },
     Options { from_pause: bool },
     Pause,
     Loading { progress: f32 },
@@ -56,7 +57,7 @@ pub fn draw(screen: &mut Screen, ui: &mut Ui, options: &mut Options) -> Action {
         Screen::None => Action::None,
         Screen::Title => title(ui),
         Screen::SelectWorld(state) => select_world(ui, state),
-        Screen::CreateWorld { name, seed } => create_world(ui, name, seed),
+        Screen::CreateWorld { name, seed, mode } => create_world(ui, name, seed, mode),
         Screen::Options { from_pause } => options_screen(ui, options, *from_pause),
         Screen::Pause => pause(ui),
         Screen::Loading { progress } => loading(ui, *progress),
@@ -142,7 +143,7 @@ fn select_world(ui: &mut Ui, state: &mut SelectWorld) -> Action {
         action = Action::Play(state.worlds[selected.unwrap()].clone());
     }
     if ui.button(Rect::new(cx + 4.0, row1, 150.0, 20.0), "Create New World", true) {
-        action = Action::Open(Screen::CreateWorld { name: "New World".into(), seed: String::new() });
+        action = Action::Open(Screen::CreateWorld { name: "New World".into(), seed: String::new(), mode: GameMode::Survival });
     }
     let delete_label = if state.confirm_delete { "Click again to delete" } else { "Delete" };
     if ui.button(Rect::new(cx - 154.0, row2, 150.0, 20.0), delete_label, selected.is_some()) {
@@ -164,7 +165,7 @@ fn select_world(ui: &mut Ui, state: &mut SelectWorld) -> Action {
     action
 }
 
-fn create_world(ui: &mut Ui, name: &mut String, seed: &mut String) -> Action {
+fn create_world(ui: &mut Ui, name: &mut String, seed: &mut String, mode: &mut GameMode) -> Action {
     let cx = ui.width / 2.0;
     let left = (cx - 100.0).floor();
     dim(ui, 0.6);
@@ -174,13 +175,18 @@ fn create_world(ui: &mut Ui, name: &mut String, seed: &mut String) -> Action {
     ui.text(left, 92.0, "Seed for the World Generator", GRAY);
     ui.text_field(2, Rect::new(left, 105.0, 200.0, 20.0), seed, 32);
     ui.text(left, 130.0, "Leave blank for a random seed", DARK_GRAY);
+    // Like vanilla's create world screen: Survival or Creative.
+    let label = format!("Game Mode: {}", if *mode == GameMode::Creative { "Creative" } else { "Survival" });
+    if ui.button(Rect::new(left, 150.0, 200.0, 20.0), &label, true) {
+        *mode = if *mode == GameMode::Creative { GameMode::Survival } else { GameMode::Creative };
+    }
 
     let row = ui.height - 28.0;
     let create = ui.button(Rect::new(cx - 155.0, row, 150.0, 20.0), "Create New World", true)
         || ui.input.pressed(KeyCode::Enter);
     if create {
         ui.clear_focus();
-        return match saves::create_world(name, seed) {
+        return match saves::create_world(name, seed, *mode) {
             Ok(entry) => Action::Play(entry),
             Err(err) => {
                 log::error!("creating world: {err:#}");

@@ -12,6 +12,7 @@ use rscraft_world::Block;
 use serde::{Deserialize, Serialize};
 
 use crate::chunks::Edits;
+use crate::gamemode::GameMode;
 use crate::inventory::{HOTBAR, Inventory, ItemStack, MAX_STACK};
 
 fn data_dir() -> PathBuf {
@@ -75,6 +76,11 @@ pub struct WorldSave {
     pub time_of_day: f32,
     /// None until the world has been played once.
     pub player: Option<PlayerSave>,
+    #[serde(default)]
+    pub game_mode: GameMode,
+    /// What F3+F4 offers first.
+    #[serde(default)]
+    pub previous_game_mode: Option<GameMode>,
 }
 
 impl WorldSave {
@@ -194,7 +200,7 @@ pub fn list_worlds() -> Vec<WorldEntry> {
 
 /// Creates and saves a new world. The folder name is derived from the world
 /// name, made unique if needed.
-pub fn create_world(name: &str, seed_text: &str) -> Result<WorldEntry> {
+pub fn create_world(name: &str, seed_text: &str, game_mode: GameMode) -> Result<WorldEntry> {
     let name = if name.trim().is_empty() { "New World" } else { name.trim() };
     let base: String = name
         .chars()
@@ -216,6 +222,8 @@ pub fn create_world(name: &str, seed_text: &str) -> Result<WorldEntry> {
             last_played: now,
             time_of_day: 0.04,
             player: None,
+            game_mode,
+            previous_game_mode: None,
         },
     };
     entry.write()?;
