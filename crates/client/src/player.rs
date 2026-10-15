@@ -26,18 +26,26 @@ pub struct EntityVertex {
 /// Everything needed to pose the model.
 pub struct PlayerPose {
     pub feet: Vec3,
+    /// Body yaw in radians.
     pub yaw: f32,
-    pub head_pitch: f32,
-    /// Limb swing angle in radians (positive = right arm forward).
-    pub swing: f32,
-    /// Sky light level at the player, 0..1.
-    pub light: f32,
-    /// 0..1 blend into the horizontal swimming pose.
-    pub swim: f32,
     /// How far the head is turned from the body, in radians.
     pub head_yaw: f32,
-    /// Walk/swim cycle phase in radians, drives the swimming strokes.
-    pub limb_phase: f32,
+    /// Head pitch in radians, up positive.
+    pub head_pitch: f32,
+    /// The walking animation (vanilla's WalkAnimationState): position and speed 0..1.
+    pub limb_position: f32,
+    pub limb_speed: f32,
+    /// Ticks the player has existed, for the arms' idle sway.
+    pub age: f32,
+    /// Attack swing progress 0..1, 0 when not swinging.
+    pub attack: f32,
+    /// Holding an item in the right hand.
+    pub holding: bool,
+    pub crouching: bool,
+    /// 0..1 blend into the horizontal swimming pose.
+    pub swim: f32,
+    /// Sky light level at the player, 0..1.
+    pub light: f32,
 }
 
 /// A box of the model in model pixels (Y up from the feet, front towards -Z,
@@ -85,20 +93,20 @@ const LEFT_ARM: Part = Part {
     pivot: [-5., 22., 0.],
 };
 const RIGHT_LEG: Part = Part {
-    min: [0., 0., -2.],
+    min: [-0.1, 0., -2.],
     size: [4., 12., 4.],
     uv: [0., 16.],
     overlay_uv: [0., 32.],
     overlay_inflate: 0.25,
-    pivot: [2., 12., 0.],
+    pivot: [1.9, 12., 0.],
 };
 const LEFT_LEG: Part = Part {
-    min: [-4., 0., -2.],
+    min: [-3.9, 0., -2.],
     size: [4., 12., 4.],
     uv: [16., 48.],
     overlay_uv: [0., 48.],
     overlay_inflate: 0.25,
-    pivot: [-2., 12., 0.],
+    pivot: [-1.9, 12., 0.],
 };
 
 /// Skin region of a box face, following Minecraft's box UV layout:
@@ -212,40 +220,179 @@ pub fn held_block_first_person(pose: &HandPose) -> Mat4 {
 }
 
 /// Where a block held in the right hand is drawn in third person, as the
-/// transform of the unit cube 0..1.
+/// transform of the unit cube 0..1: at the end of the arm however it is
+/// posed (ItemInHandLayer), then the block model's third-person display
+/// transform (tipped 75°, turned 45°, scaled to 0.375).
 pub fn held_block_third_person(pose: &PlayerPose) -> Mat4 {
-    // At the bottom of the right arm, a little in front of it, 6 pixels wide.
-    part_transform(pose, &RIGHT_ARM, pose.swing)
-        * Mat4::from_translation(Vec3::new(6.0, 11.0, -3.0))
-        * Mat4::from_rotation_y(45f32.to_radians())
-        * Mat4::from_scale(Vec3::splat(6.0))
+    let arm = setup_anim(pose).right_arm;
+    let pivot = vanilla_space().transform_point3(Vec3::from(RIGHT_ARM.pivot));
+    body_transform(pose)
+        * vanilla_space()
+        * Mat4::from_translation(pivot + arm.offset)
+        * arm.rotation()
+        // Model pixels to blocks.
+        * Mat4::from_scale(Vec3::splat(16.0))
+        * Mat4::from_rotation_x(degrees(-90.0))
+        * Mat4::from_rotation_y(degrees(180.0))
+        * Mat4::from_translation(Vec3::new(1.0, 2.0, -10.0) / 16.0)
+        * Mat4::from_translation(Vec3::new(0.0, 2.5, 0.0) / 16.0)
+        * Mat4::from_rotation_x(degrees(75.0))
+        * Mat4::from_rotation_y(degrees(45.0))
+        * Mat4::from_scale(Vec3::splat(0.375))
         * Mat4::from_translation(Vec3::splat(-0.5))
 }
 
-/// Model-pixel to world transform of the whole body. When swimming the body
-/// tips forward to lie along the look direction, centred on the 0.6 block
-/// tall swimming hitbox (vanilla's setupRotations).
+/// Model-pixel to world transform of the whole body (our part coordinates:
+/// Y up from the feet). When swimming the body tips forward to lie along the
+/// look direction, centred on the 0.6 block tall swimming hitbox (vanilla's
+/// setupRotations); crouching lowers it by two pixels.
 fn body_transform(pose: &PlayerPose) -> Mat4 {
     let s = pose.swim;
     let tip = (-std::f32::consts::FRAC_PI_2 + pose.head_pitch) * s;
-    Mat4::from_translation(pose.feet + Vec3::Y * 0.3 * s)
+    let crouch = if pose.crouching { -2.0 / 16.0 } else { 0.0 };
+    Mat4::from_translation(pose.feet + Vec3::Y * (0.3 * s + crouch))
         * Mat4::from_rotation_y(-pose.yaw)
         * Mat4::from_rotation_x(tip)
         * Mat4::from_translation(Vec3::Y * -0.9 * s)
         * Mat4::from_scale(Vec3::splat(PIXEL))
 }
 
-/// Model-pixel to world transform of a body part rotated about its pivot.
-fn part_transform(pose: &PlayerPose, part: &Part, angle: f32) -> Mat4 {
-    let world = body_transform(pose);
-    let pivot = Vec3::from(part.pivot);
-    // Only the head turns sideways on its own.
-    let yaw = if part.uv == HEAD.uv { pose.head_yaw } else { 0.0 };
-    world
-        * Mat4::from_translation(pivot)
-        * Mat4::from_rotation_y(-yaw)
-        * Mat4::from_rotation_x(angle)
+/// Our part coordinates to vanilla's model space and back (it is its own
+/// inverse): vanilla's Y points down from the neck and X is mirrored.
+fn vanilla_space() -> Mat4 {
+    Mat4::from_translation(Vec3::new(0.0, 24.0, 0.0)) * Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0))
+}
+
+/// A model part's pose in vanilla's terms (ModelPart's x/y/z and rotations).
+#[derive(Clone, Copy, Default)]
+struct PartPose {
+    /// Rotations about X, Y and Z in radians, applied Z·Y·X like vanilla.
+    rot: Vec3,
+    /// Movement of the pivot from its rest position, in pixels.
+    offset: Vec3,
+}
+
+impl PartPose {
+    fn rotation(self) -> Mat4 {
+        Mat4::from_rotation_z(self.rot.z) * Mat4::from_rotation_y(self.rot.y) * Mat4::from_rotation_x(self.rot.x)
+    }
+}
+
+#[derive(Default)]
+struct ModelPose {
+    head: PartPose,
+    body: PartPose,
+    right_arm: PartPose,
+    left_arm: PartPose,
+    right_leg: PartPose,
+    left_leg: PartPose,
+}
+
+/// Model-pixel to world transform of a posed part, for its boxes in our
+/// part coordinates.
+fn part_transform(pose: &PlayerPose, part: &Part, part_pose: PartPose) -> Mat4 {
+    let pivot = vanilla_space().transform_point3(Vec3::from(part.pivot));
+    body_transform(pose)
+        * vanilla_space()
+        * Mat4::from_translation(pivot + part_pose.offset)
+        * part_pose.rotation()
         * Mat4::from_translation(-pivot)
+        * vanilla_space()
+}
+
+/// Rotation from `from` towards `to` by `t`, the short way round (Mth.rotLerpRad).
+fn rot_lerp(t: f32, from: f32, to: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let diff = (to - from + PI).rem_euclid(TAU) - PI;
+    from + t * diff
+}
+
+fn lerp(t: f32, from: f32, to: f32) -> f32 {
+    from + (to - from) * t
+}
+
+/// Poses the model like vanilla's HumanoidModel.setupAnim: walking, the
+/// arm holding an item, the attack swing, crouching, the arms' idle sway
+/// and swimming strokes.
+fn setup_anim(pose: &PlayerPose) -> ModelPose {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+    let mut m = ModelPose::default();
+    m.head.rot = Vec3::new(-pose.head_pitch, pose.head_yaw, 0.0);
+
+    let (position, speed) = (pose.limb_position, pose.limb_speed);
+    let walk = position * 0.6662;
+    m.right_arm.rot.x = (walk + PI).cos() * speed;
+    m.left_arm.rot.x = walk.cos() * speed;
+    m.right_leg.rot = Vec3::new(walk.cos() * 1.4 * speed, 0.005, 0.005);
+    m.left_leg.rot = Vec3::new((walk + PI).cos() * 1.4 * speed, -0.005, -0.005);
+    if pose.holding {
+        m.right_arm.rot.x = m.right_arm.rot.x * 0.5 - PI / 10.0;
+    }
+
+    let a = pose.attack;
+    if a > 0.0 {
+        // The body twists into the swing, carrying the shoulders along.
+        let twist = (a.sqrt() * TAU).sin() * 0.2;
+        m.body.rot.y = twist;
+        m.right_arm.offset = Vec3::new(5.0 - twist.cos() * 5.0, 0.0, twist.sin() * 5.0);
+        m.left_arm.offset = Vec3::new(twist.cos() * 5.0 - 5.0, 0.0, -twist.sin() * 5.0);
+        m.right_arm.rot.y += twist;
+        m.left_arm.rot.y += twist;
+        m.left_arm.rot.x += twist;
+        let out_quart = 1.0 - (1.0 - a).powi(4);
+        let lift = (out_quart * PI).sin() * 1.2 + (a * PI).sin() * -(m.head.rot.x - 0.7) * 0.75;
+        m.right_arm.rot.x -= lift;
+        m.right_arm.rot.y += twist * 2.0;
+        m.right_arm.rot.z += (a * PI).sin() * -0.4;
+    }
+
+    if pose.crouching {
+        m.body.rot.x = 0.5;
+        m.right_arm.rot.x += 0.4;
+        m.left_arm.rot.x += 0.4;
+        m.right_leg.offset.z += 4.0;
+        m.left_leg.offset.z += 4.0;
+        m.head.offset.y += 4.2;
+        m.body.offset.y += 3.2;
+        m.left_arm.offset.y += 3.2;
+        m.right_arm.offset.y += 3.2;
+    }
+
+    let (sway_z, sway_x) = ((pose.age * 0.09).cos() * 0.05 + 0.05, (pose.age * 0.067).sin() * 0.05);
+    m.right_arm.rot += Vec3::new(sway_x, 0.0, sway_z);
+    m.left_arm.rot -= Vec3::new(sway_x, 0.0, sway_z);
+
+    let swim = pose.swim;
+    if swim > 0.0 {
+        m.head.rot.x = rot_lerp(swim, m.head.rot.x, -FRAC_PI_4);
+        // The arm swinging an attack doesn't swim.
+        let (right, left) = (if a > 0.0 { 0.0 } else { swim }, swim);
+        let quadratic = |x: f32| -65.0 * x + x * x;
+        let stroke = position % 26.0;
+        let (x, z_left, z_right) = if stroke < 14.0 {
+            let reach = 1.870_796_4 * quadratic(stroke) / quadratic(14.0);
+            (0.0, PI + reach, PI - reach)
+        } else if stroke < 22.0 {
+            let t = (stroke - 14.0) / 8.0;
+            (FRAC_PI_2 * t, 5.012_389 - 1.870_796_4 * t, 1.270_796_3 + 1.870_796_4 * t)
+        } else {
+            let t = (stroke - 22.0) / 4.0;
+            (FRAC_PI_2 - FRAC_PI_2 * t, PI, PI)
+        };
+        m.left_arm.rot = Vec3::new(
+            rot_lerp(left, m.left_arm.rot.x, x),
+            rot_lerp(left, m.left_arm.rot.y, PI),
+            rot_lerp(left, m.left_arm.rot.z, z_left),
+        );
+        m.right_arm.rot = Vec3::new(
+            lerp(right, m.right_arm.rot.x, x),
+            lerp(right, m.right_arm.rot.y, PI),
+            lerp(right, m.right_arm.rot.z, z_right),
+        );
+        m.left_leg.rot.x = lerp(swim, m.left_leg.rot.x, 0.3 * (position / 3.0 + PI).cos());
+        m.right_leg.rot.x = lerp(swim, m.right_leg.rot.x, 0.3 * (position / 3.0).cos());
+    }
+    m
 }
 
 /// Builds the first-person right arm in world space, placed and swung like
@@ -283,26 +430,18 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
 
 /// Builds the posed model as a triangle list in world space.
 pub fn build_mesh(pose: &PlayerPose) -> Vec<EntityVertex> {
-    let rotated = |part: &Part, angle: f32| part_transform(pose, part, angle);
-    let s = pose.swim;
-    let lerp = |a: f32, b: f32| a + (b - a) * s;
-    let phase = pose.limb_phase;
-    // Swimming: the head looks ahead (45° up from the body), the arms crawl
-    // in alternating full strokes and the legs flutter, like vanilla.
-    let (stroke_right, stroke_left) =
-        (phase % std::f32::consts::TAU, (phase + std::f32::consts::PI) % std::f32::consts::TAU);
-    let kick = 0.3 * (phase * 2.0).cos();
+    let m = setup_anim(pose);
     let parts = [
-        (&HEAD, lerp(pose.head_pitch, std::f32::consts::FRAC_PI_4)),
-        (&BODY, 0.0),
-        (&RIGHT_ARM, lerp(pose.swing, stroke_right)),
-        (&LEFT_ARM, lerp(-pose.swing, stroke_left)),
-        (&RIGHT_LEG, lerp(-pose.swing, kick)),
-        (&LEFT_LEG, lerp(pose.swing, -kick)),
+        (&HEAD, m.head),
+        (&BODY, m.body),
+        (&RIGHT_ARM, m.right_arm),
+        (&LEFT_ARM, m.left_arm),
+        (&RIGHT_LEG, m.right_leg),
+        (&LEFT_LEG, m.left_leg),
     ];
     let mut out = Vec::with_capacity(parts.len() * 2 * 36);
-    for (part, angle) in parts {
-        let transform = rotated(part, angle);
+    for (part, part_pose) in parts {
+        let transform = part_transform(pose, part, part_pose);
         push_box(&mut out, part, part.uv, 0.0, transform, pose.light);
         push_box(&mut out, part, part.overlay_uv, part.overlay_inflate, transform, pose.light);
     }

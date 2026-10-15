@@ -106,6 +106,11 @@ pub struct PlayerController {
     previous_walk_distance: f32,
     bob: f32,
     previous_bob: f32,
+    /// Vanilla's WalkAnimationState: how far the limbs have swung, and how
+    /// fast they swing now (0..1), at the last two ticks.
+    limb_position: f32,
+    limb_speed: f32,
+    previous_limb_speed: f32,
 }
 
 impl PlayerController {
@@ -133,6 +138,9 @@ impl PlayerController {
             last_jump_press: None,
             eye_height: EYE_HEIGHT,
             previous_eye_height: EYE_HEIGHT,
+            limb_position: 0.0,
+            limb_speed: 0.0,
+            previous_limb_speed: 0.0,
             walk_distance: 0.0,
             previous_walk_distance: 0.0,
             bob: 0.0,
@@ -324,6 +332,23 @@ impl PlayerController {
         let target_bob = if self.on_ground && !self.flying { moved.length().min(0.1) } else { 0.0 };
         self.bob += (target_bob - self.bob) * 0.4;
         self.walk_distance += moved.length() * 0.6;
+
+        // Limbs swing with horizontal movement anywhere, in water too
+        // (LivingEntity.updateWalkAnimation).
+        self.previous_limb_speed = self.limb_speed;
+        self.limb_speed += ((moved.length() * 4.0).min(1.0) - self.limb_speed) * 0.4;
+        self.limb_position += self.limb_speed;
+    }
+
+    /// The walking animation between ticks: limb swing position and speed (0..1).
+    pub fn limb_swing(&self, partial: f32) -> (f32, f32) {
+        let speed = self.previous_limb_speed + (self.limb_speed - self.previous_limb_speed) * partial;
+        (self.limb_position - self.limb_speed * (1.0 - partial), speed.min(1.0))
+    }
+
+    /// Ticks the player has existed, between ticks; drives idle arm sway.
+    pub fn age(&self, partial: f32) -> f32 {
+        self.ticks as f32 + partial
     }
 
     /// Vanilla's updateSwimming: start swimming when sprinting with the eyes

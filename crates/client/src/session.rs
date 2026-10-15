@@ -443,16 +443,19 @@ impl Session {
     pub fn preview(&self, rect: Rect, mouse: glam::Vec2, gui_scale: f32, layers: &BlockLayers) -> Preview {
         let center = glam::Vec2::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
         let (turn, tilt) = (((center.x - mouse.x) / 40.0).atan(), ((center.y - mouse.y) / 40.0).atan());
+        // Otherwise posed like the player is right now: walking, swinging,
+        // holding an item, like vanilla.
+        let Some(pose) = self.pose() else {
+            return Preview { rect, gui_scale, body: Vec::new(), held: MeshData::default() };
+        };
         let pose = PlayerPose {
             feet: Vec3::new(0.0, 0.0, -PREVIEW_DEPTH),
             // Facing the viewer, turned 20° (body) and 40° (head) per radian.
             yaw: std::f32::consts::PI + turn * 20f32.to_radians(),
             head_yaw: turn * 20f32.to_radians(),
             head_pitch: tilt * 20f32.to_radians(),
-            swing: 0.0,
             light: 1.0,
-            swim: 0.0,
-            limb_phase: 0.0,
+            ..pose
         };
         let mut held = MeshData::default();
         if let Some(stack) = self.inventory.selected_stack() {
@@ -572,16 +575,21 @@ impl Session {
 
     pub fn pose(&self) -> Option<PlayerPose> {
         let player = self.player.as_ref()?;
-        let (walk, bob) = player.bobbing(self.partial());
+        let partial = self.partial();
+        let (limb_position, limb_speed) = player.limb_swing(partial);
         Some(PlayerPose {
-            feet: player.feet(self.partial()),
+            feet: player.feet(partial),
             yaw: self.camera.yaw,
-            head_pitch: self.camera.pitch,
-            swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
-            light: self.player_light,
-            swim: player.swim_amount(self.partial()),
             head_yaw: 0.0,
-            limb_phase: walk * 3.6,
+            head_pitch: self.camera.pitch,
+            limb_position,
+            limb_speed,
+            age: player.age(partial),
+            attack: self.hand.swing_progress(partial),
+            holding: self.inventory.selected_stack().is_some(),
+            crouching: player.sneaking && !player.flying,
+            swim: player.swim_amount(partial),
+            light: self.player_light,
         })
     }
 

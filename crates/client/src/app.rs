@@ -591,6 +591,10 @@ impl State {
         }
         self.input.attack = run.script.attack;
         self.input.use_item = run.script.use_item;
+        if let Some([x, y]) = run.script.mouse {
+            let (w, h) = self.renderer.size();
+            self.ui.input.mouse = glam::Vec2::new(x * w as f32, y * h as f32) / self.ui.scale;
+        }
         if run.due() {
             self.renderer.request_screenshot(run.script.screenshot.clone());
             run.screenshot_taken = true;

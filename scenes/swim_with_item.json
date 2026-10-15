@@ -1,0 +1,6 @@
+{ "position": [-7.5, 66.0, 16.5], "yaw": 180, "perspective": "front", "keys": ["KeyW", "ControlLeft"], "hotbar": [["oak_log", 1]], "time": 0.25,
+  "fill": [
+    { "from": [-16, 63, 14], "to": [0, 70, 40], "block": "stone" },
+    { "from": [-15, 64, 15], "to": [-1, 70, 39], "block": "water" }
+  ],
+  "wait": 1.75, "screenshot": "out/swim_with_item.png" }
