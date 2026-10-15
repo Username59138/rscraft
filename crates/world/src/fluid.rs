@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 
 use crate::Block;
 
@@ -69,6 +69,82 @@ impl Fluid {
 /// Height of a water block's surface without water above it, 0..1.
 pub fn own_height(block: Block) -> f32 {
     Fluid::of(block).map_or(0.0, |f| f.amount as f32 / 9.0)
+}
+
+/// Height of the water surface in a block, 0..1: full under more water.
+fn height(world: &impl Fn(IVec3) -> Block, pos: IVec3) -> f32 {
+    if world(pos + IVec3::Y).is_water() { 1.0 } else { own_height(world(pos)) }
+}
+
+/// Which way the water at `pos` flows, normalized; zero for still water.
+/// Like vanilla's FlowingFluid.getFlow: towards lower neighbours and drops
+/// next to it, and falling water next to a wall also pulls down.
+pub fn flow(world: &impl Fn(IVec3) -> Block, pos: IVec3) -> Vec3 {
+    let block = world(pos);
+    let own = own_height(block);
+    let mut flow = Vec3::ZERO;
+    for dir in HORIZONTAL {
+        let side = pos + dir;
+        let neighbour = world(side);
+        // Other fluids would block the flow; we only have water.
+        if neighbour.is_solid() {
+            continue;
+        }
+        let neighbour_height = own_height(neighbour);
+        let distance = if neighbour_height > 0.0 {
+            own - neighbour_height
+        } else {
+            // Open but dry: flow towards the water below it, if any.
+            let below = own_height(world(side - IVec3::Y));
+            if below > 0.0 { own - (below - 8.0 / 9.0) } else { 0.0 }
+        };
+        flow += dir.as_vec3() * distance;
+    }
+    if Fluid::of(block).is_some_and(|f| f.falling) {
+        let wall = |p: IVec3| !world(p).is_water() && world(p).is_solid();
+        if HORIZONTAL.iter().any(|&dir| wall(pos + dir) || wall(pos + dir + IVec3::Y)) {
+            flow = flow.normalize_or_zero() - Vec3::Y * 6.0;
+        }
+    }
+    flow.normalize_or_zero()
+}
+
+/// The push of flowing water on something with the box `min`..`max` at
+/// `velocity`, for one tick (vanilla's EntityFluidInteraction). Players
+/// get the average flow of the water they touch, other things its
+/// direction at full strength.
+pub fn current(world: &impl Fn(IVec3) -> Block, min: Vec3, max: Vec3, velocity: Vec3, player: bool) -> Vec3 {
+    let (min, max) = (min + 0.001, max - 0.001);
+    let (from, to) = (min.floor().as_ivec3(), max.ceil().as_ivec3() - 1);
+    let (mut sum, mut count, mut depth) = (Vec3::ZERO, 0, 0.0_f32);
+    for x in from.x..=to.x {
+        for y in from.y..=to.y {
+            for z in from.z..=to.z {
+                let pos = IVec3::new(x, y, z);
+                if !world(pos).is_water() {
+                    continue;
+                }
+                let top = y as f32 + height(world, pos);
+                if top < min.y {
+                    continue;
+                }
+                depth = depth.max(top - min.y);
+                // Water shallower than 0.4 blocks pushes less.
+                let strength = if depth < 0.4 { depth } else { 1.0 };
+                sum += flow(world, pos) * strength;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 || sum.length_squared() < 1e-5 {
+        return Vec3::ZERO;
+    }
+    let mut push = if player { sum / count as f32 } else { sum.normalize() } * 0.014;
+    // Something at rest gets at least a nudge.
+    if velocity.x.abs() < 0.003 && velocity.z.abs() < 0.003 && push.length() < 0.0045 {
+        push = push.normalize() * 0.0045;
+    }
+    push
 }
 
 fn is_source(block: Block) -> bool {
@@ -399,6 +475,20 @@ mod tests {
         place(&mut world, &mut ticks, IVec3::new(2, 1, 0), Block::WATER);
         world.run(&mut ticks, 50);
         assert_eq!(world.block(IVec3::new(1, 1, 0)), Some(Block::WATER));
+    }
+
+    #[test]
+    fn flowing_water_pushes_away_from_the_source() {
+        let (mut world, mut ticks) = (TestWorld::new(), FluidTicks::default());
+        place(&mut world, &mut ticks, IVec3::new(0, 1, 0), Block::WATER);
+        world.run(&mut ticks, 200);
+        let get = |p: IVec3| world.block(p).unwrap_or(Block::Air);
+        // A player standing in the flow east of the source.
+        let feet = Vec3::new(3.5, 1.0, 0.5);
+        let push = current(&get, feet - Vec3::new(0.3, 0.0, 0.3), feet + Vec3::new(0.3, 1.8, 0.3), Vec3::ZERO, true);
+        assert!(push.x > 0.0 && push.z.abs() < 1e-6, "{push}");
+        // The source flows out evenly on all sides, so it doesn't push at all.
+        assert_eq!(flow(&get, IVec3::new(0, 1, 0)), Vec3::ZERO);
     }
 
     #[test]

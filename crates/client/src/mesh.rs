@@ -323,30 +323,11 @@ impl Neighborhood {
         heights
     }
 
-    /// Which way the water at `pos` flows, horizontally (x, z), normalized;
-    /// zero for still water. Like vanilla's FlowingFluid.getFlow: towards
-    /// lower neighbours, and towards drops next to it.
+    /// Which way the water at `pos` flows, horizontally (x, z); zero for
+    /// still water.
     fn water_flow(&self, pos: IVec3) -> Vec2 {
-        let own = fluid::own_height(self.get(pos.x, pos.y, pos.z));
-        let mut flow = Vec2::ZERO;
-        for (dx, dz) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
-            let side = pos + IVec3::new(dx, 0, dz);
-            let neighbour = self.get(side.x, side.y, side.z);
-            // Other fluids would block the flow; we only have water.
-            if neighbour.is_solid() {
-                continue;
-            }
-            let height = fluid::own_height(neighbour);
-            let distance = if height > 0.0 {
-                own - height
-            } else {
-                // Open but dry: flow towards the water below it, if any.
-                let below = fluid::own_height(self.get(side.x, side.y - 1, side.z));
-                if below > 0.0 { own - (below - 8.0 / 9.0) } else { 0.0 }
-            };
-            flow += Vec2::new(dx as f32, dz as f32) * distance;
-        }
-        flow.normalize_or_zero()
+        let flow = fluid::flow(&|p: IVec3| self.get(p.x, p.y, p.z), pos);
+        Vec2::new(flow.x, flow.z)
     }
 
     fn corner_height(&self, own: f32, side_x: f32, side_z: f32, diagonal: IVec3) -> f32 {

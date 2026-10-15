@@ -217,6 +217,13 @@ impl PlayerController {
             }
         }
 
+        // Flowing water pushes the player, unless flying (Player.isPushedByFluid).
+        if !self.flying && !self.noclip {
+            let world = |p: IVec3| world(p).unwrap_or(Block::Air);
+            let aabb = self.aabb();
+            self.velocity += crate::fluid::current(&world, aabb.min, aabb.max, self.velocity, true);
+        }
+
         if self.noclip {
             self.flying = true;
         } else if !self.may_fly {

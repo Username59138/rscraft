@@ -137,6 +137,9 @@ impl DroppedItems {
 impl DroppedItem {
     fn tick(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         self.previous = self.position;
+        let water = |p: IVec3| world(p).unwrap_or(Block::Air);
+        let (min, max) = (self.position - HALF_SIZE, self.position + HALF_SIZE);
+        self.velocity += crate::fluid::current(&water, min, max, self.velocity, false);
         self.velocity.y -= GRAVITY;
         // Slide along each axis until something solid is in the way.
         let solid = |p: Vec3| world(p.floor().as_ivec3()).is_none_or(Block::is_solid);
