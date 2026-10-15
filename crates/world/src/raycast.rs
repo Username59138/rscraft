@@ -6,11 +6,13 @@ use glam::{IVec3, Vec3};
 /// Survival reach, like vanilla.
 pub const REACH: f32 = 4.5;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     pub block: IVec3,
     /// Normal of the face that was hit; the block placed would go at `block + normal`.
     pub normal: IVec3,
+    /// How far along the ray the block was entered.
+    pub distance: f32,
 }
 
 /// Walks the voxel grid along the ray (Amanatides & Woo DDA) and returns the
@@ -40,7 +42,7 @@ pub fn raycast(
         // The normal stays zero if the eye itself is inside the block.
         match world(block) {
             None => return None,
-            Some(b) if b.is_targetable() => return Some(Hit { block, normal }),
+            Some(b) if b.is_targetable() => return Some(Hit { block, normal, distance }),
             _ => {}
         }
         // Step along the axis whose next grid line is closest.

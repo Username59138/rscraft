@@ -509,7 +509,7 @@ impl Session {
             hand: None,
             items: item_render::build_mesh(&self.items, layers, seconds, partial, feet, light),
             particles: {
-                let camera = self.camera.for_perspective(perspective);
+                let camera = self.camera.for_perspective(perspective, |pos| self.chunks.block_at(pos));
                 let up = camera.right().cross(camera.forward()).normalize();
                 self.particles.build_mesh(partial, camera.right(), up, light)
             },

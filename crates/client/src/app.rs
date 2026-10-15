@@ -483,7 +483,8 @@ impl State {
             let rect = inventory_screen::preview_rect(&self.ui);
             self.session.preview(rect, self.ui.input.mouse, self.ui.scale, &self.layers)
         });
-        let camera = self.session.camera.for_perspective(perspective);
+        let chunks = &self.session.chunks;
+        let camera = self.session.camera.for_perspective(perspective, |pos| chunks.block_at(pos));
         let underwater = self.session.underwater(&camera, dt);
         let t_scene = Instant::now();
         self.renderer.render(Frame {

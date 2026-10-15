@@ -1,5 +1,7 @@
 use glam::camera::rh::{proj, view};
-use glam::{Mat4, Vec3};
+use glam::{IVec3, Mat4, Vec3};
+use rscraft_world::Block;
+use rscraft_world::raycast::raycast;
 
 use crate::input::Input;
 
@@ -92,19 +94,37 @@ impl Camera {
         Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin())
     }
 
-    /// The camera actually used for rendering in the given perspective.
-    pub fn for_perspective(&self, perspective: Perspective) -> Camera {
+    /// The camera actually used for rendering in the given perspective. In
+    /// third person it backs away from the eyes, but stops short of blocks.
+    pub fn for_perspective(&self, perspective: Perspective, world: impl Fn(IVec3) -> Option<Block>) -> Camera {
         let mut camera = self.clone();
         match perspective {
             Perspective::FirstPerson => {}
-            Perspective::ThirdPersonBack => camera.position -= self.forward() * THIRD_PERSON_DISTANCE,
+            Perspective::ThirdPersonBack => {
+                camera.position -= self.forward() * self.max_distance(-self.forward(), &world);
+            }
             Perspective::ThirdPersonFront => {
-                camera.position += self.forward() * THIRD_PERSON_DISTANCE;
+                camera.position += self.forward() * self.max_distance(self.forward(), &world);
                 camera.yaw += std::f32::consts::PI;
                 camera.pitch = -self.pitch;
             }
         }
         camera
+    }
+
+    /// How far the camera can back away from the eyes along `direction`, like
+    /// vanilla's Camera.getMaxZoom: rays from the corners of a 0.2 block cube
+    /// around the eyes, so the view doesn't clip into a wall it nearly touches.
+    fn max_distance(&self, direction: Vec3, world: &impl Fn(IVec3) -> Option<Block>) -> f32 {
+        let mut distance = THIRD_PERSON_DISTANCE;
+        for i in 0..8 {
+            let corner = Vec3::new((i & 1) as f32, (i >> 1 & 1) as f32, (i >> 2 & 1) as f32) * 2.0 - 1.0;
+            let from = self.position + corner * 0.1;
+            if let Some(hit) = raycast(from, direction, distance, world) {
+                distance = distance.min((from + direction * hit.distance).distance(self.position));
+            }
+        }
+        distance
     }
 
     /// World to view space, view bobbing included.
