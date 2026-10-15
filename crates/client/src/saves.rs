@@ -4,8 +4,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
+use glam::{IVec2, IVec3};
+use rscraft_world::Block;
 use serde::{Deserialize, Serialize};
+
+use crate::chunks::Edits;
+use crate::inventory::{HOTBAR, Inventory, ItemStack, MAX_STACK};
 
 fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("rscraft")
@@ -22,6 +29,41 @@ pub struct PlayerSave {
     pub pitch: f32,
     #[serde(default)]
     pub flying: bool,
+    #[serde(default)]
+    pub inventory: Vec<SlotSave>,
+    #[serde(default)]
+    pub selected_slot: usize,
+}
+
+/// One non-empty inventory slot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SlotSave {
+    pub slot: usize,
+    /// Block id (see `Block::from_id`).
+    pub block: u8,
+    pub count: u8,
+}
+
+impl PlayerSave {
+    pub fn load_inventory(&self) -> Inventory {
+        let mut inventory = Inventory { selected: self.selected_slot.min(HOTBAR - 1), ..Default::default() };
+        for s in &self.inventory {
+            if let (Some(slot), Some(block)) = (inventory.slots.get_mut(s.slot), Block::from_id(s.block)) {
+                *slot = Some(ItemStack { block, count: s.count.clamp(1, MAX_STACK) });
+            }
+        }
+        inventory
+    }
+
+    pub fn store_inventory(&mut self, inventory: &Inventory) {
+        self.selected_slot = inventory.selected;
+        self.inventory = inventory
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, s)| s.map(|s| SlotSave { slot, block: s.block as u8, count: s.count }))
+            .collect();
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,9 +101,70 @@ impl WorldEntry {
         fs::write(self.folder.join("world.json"), json).with_context(|| format!("saving {}", self.folder.display()))
     }
 
+    /// Player block edits, stored as a small binary file: per column its
+    /// coordinates and edit count, then (x, y, z, block id) per edit.
+    pub fn write_edits(&self, edits: &Edits) -> Result<()> {
+        let mut out = Vec::from(*EDITS_MAGIC);
+        out.extend_from_slice(&(edits.len() as u32).to_le_bytes());
+        for (column, blocks) in edits {
+            for v in [column.x, column.y] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+            for (pos, block) in blocks {
+                for v in [pos.x, pos.y, pos.z] {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+                out.push(*block as u8);
+            }
+        }
+        fs::write(self.folder.join("edits.bin"), out).context("saving block edits")
+    }
+
+    pub fn read_edits(&self) -> Edits {
+        let Ok(data) = fs::read(self.folder.join("edits.bin")) else { return Edits::new() };
+        parse_edits(&data).unwrap_or_else(|| {
+            log::error!("{}: corrupt edits.bin, ignoring it", self.folder.display());
+            Edits::new()
+        })
+    }
+
     pub fn delete(&self) -> Result<()> {
         fs::remove_dir_all(&self.folder).with_context(|| format!("deleting {}", self.folder.display()))
     }
+}
+
+const EDITS_MAGIC: &[u8; 4] = b"RSE1";
+
+/// Reads little-endian values from the front of a byte slice.
+struct Reader<'a>(&'a [u8]);
+
+impl Reader<'_> {
+    fn u8(&mut self) -> Option<u8> {
+        let (&byte, rest) = self.0.split_first()?;
+        self.0 = rest;
+        Some(byte)
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        let (bytes, rest) = self.0.split_first_chunk::<4>()?;
+        self.0 = rest;
+        Some(i32::from_le_bytes(*bytes))
+    }
+}
+
+fn parse_edits(data: &[u8]) -> Option<Edits> {
+    let mut reader = Reader(data.strip_prefix(EDITS_MAGIC)?);
+    let mut edits = Edits::new();
+    for _ in 0..reader.i32()? {
+        let column = IVec2::new(reader.i32()?, reader.i32()?);
+        let blocks: &mut HashMap<IVec3, Block> = edits.entry(column).or_default();
+        for _ in 0..reader.i32()? {
+            let pos = IVec3::new(reader.i32()?, reader.i32()?, reader.i32()?);
+            blocks.insert(pos, Block::from_id(reader.u8()?)?);
+        }
+    }
+    Some(edits)
 }
 
 fn worlds_dir() -> PathBuf {

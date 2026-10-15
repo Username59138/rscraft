@@ -15,6 +15,7 @@ use crate::clouds::CloudRenderer;
 use crate::frustum::Frustum;
 use crate::mesh::{MeshData, SectionMesh, Vertex};
 use crate::player::{EntityVertex, PlayerRenderer};
+use crate::selection::{Selection, SelectionRenderer};
 use crate::sky::{self, SkyImages, SkyRenderer, SkyState};
 use crate::texture::{BlockImages, BlockTextures};
 use crate::ui::render::UiRenderer;
@@ -89,6 +90,7 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
     solid_pipeline: wgpu::RenderPipeline,
     translucent_pipeline: wgpu::RenderPipeline,
+    crack_pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
@@ -96,6 +98,7 @@ pub struct Renderer {
     sky: SkyRenderer,
     clouds: CloudRenderer,
     player: PlayerRenderer,
+    selection: SelectionRenderer,
     ui: UiRenderer,
     sections: HashMap<IVec3, GpuSection>,
     fog_end: f32,
@@ -221,9 +224,19 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout)],
             ..Default::default()
         });
-        let pipeline = |translucent: bool| {
+        // Block cracks multiply the colour underneath by twice their own, like
+        // vanilla, so mid-grey leaves it unchanged and darker pixels darken it.
+        let multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Dst,
+                dst_factor: wgpu::BlendFactor::Src,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        };
+        let pipeline = |label, fragment, blend, translucent: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(if translucent { "translucent pipeline" } else { "solid pipeline" }),
+                label: Some(label),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
@@ -233,10 +246,10 @@ impl Renderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some(if translucent { "fs_translucent" } else { "fs_solid" }),
+                    entry_point: Some(fragment),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: config.format,
-                        blend: Some(if translucent { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
@@ -251,7 +264,7 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: Some(!translucent),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -260,12 +273,15 @@ impl Renderer {
                 cache: None,
             })
         };
-        let solid_pipeline = pipeline(false);
-        let translucent_pipeline = pipeline(true);
+        let solid_pipeline = pipeline("solid pipeline", "fs_solid", wgpu::BlendState::REPLACE, false);
+        let translucent_pipeline =
+            pipeline("translucent pipeline", "fs_translucent", wgpu::BlendState::ALPHA_BLENDING, true);
+        let crack_pipeline = pipeline("crack pipeline", "fs_crack", multiply, true);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
         let clouds = CloudRenderer::new(&device, &sky_images.clouds, &globals_layout, config.format, DEPTH_FORMAT);
         let player = PlayerRenderer::new(&device, &queue, skin, &globals_layout, config.format, DEPTH_FORMAT);
         let ui = UiRenderer::new(&device, &queue, atlas, config.format);
+        let selection = SelectionRenderer::new(&device, &globals_layout, config.format, DEPTH_FORMAT);
 
         Self {
             surface,
@@ -275,6 +291,7 @@ impl Renderer {
             depth_view,
             solid_pipeline,
             translucent_pipeline,
+            crack_pipeline,
             globals_buffer,
             globals_bind_group,
             texture_bind_group,
@@ -282,6 +299,7 @@ impl Renderer {
             sky,
             clouds,
             player,
+            selection,
             ui,
             sections: HashMap::new(),
             fog_end: fog_end(render_distance),
@@ -345,10 +363,12 @@ impl Renderer {
         seconds: f32,
         player: Option<&[EntityVertex]>,
         hand: Option<&[EntityVertex]>,
+        selection: Option<&Selection>,
         ui: &[UiVertex],
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
+        self.selection.prepare(&self.device, &self.queue, selection);
         self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
 
@@ -429,6 +449,9 @@ impl Renderer {
             for mesh in visible.iter().filter_map(|s| s.translucent.as_ref()) {
                 mesh.draw(&mut pass);
             }
+            pass.set_pipeline(&self.crack_pipeline);
+            self.selection.draw_crack(&mut pass);
+            self.selection.draw_outline(&mut pass);
         }
         if self.player.has_hand() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

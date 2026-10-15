@@ -7,6 +7,7 @@ pub mod render;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
+use rscraft_world::Block;
 use winit::keyboard::KeyCode;
 
 pub use atlas::{GuiAtlas, Sprite};
@@ -151,6 +152,36 @@ impl Ui {
             v(x1, y1, u1, v1),
             v(x0, y1, u0, v1),
         ]);
+    }
+
+    /// A textured quad with arbitrary corners, mapped to the source
+    /// rectangle's top-left, top-right, bottom-right and bottom-left.
+    fn quad_points(&mut self, p: [Vec2; 4], src: AtlasRect, color: [f32; 4]) {
+        let size = Vec2::new(self.atlas.image.width as f32, self.atlas.image.height as f32);
+        let (u0, v0) = (src.x / size.x, src.y / size.y);
+        let (u1, v1) = ((src.x + src.w) / size.x, (src.y + src.h) / size.y);
+        let uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+        let v = |i: usize| UiVertex { position: p[i].to_array(), uv: uv[i], color };
+        self.vertices.extend_from_slice(&[v(0), v(1), v(2), v(0), v(2), v(3)]);
+    }
+
+    /// A block drawn as a small isometric cube in a 16×16 slot, like
+    /// vanilla's inventory icons, with the stack size in the corner.
+    pub fn item(&mut self, block: Block, count: u8, x: f32, y: f32) {
+        if let Some([top, left, right]) = self.atlas.icon(block) {
+            let p = |px: f32, py: f32| Vec2::new(x + px, y + py);
+            let (l, t, r, c) = (p(1.0, 4.5), p(8.0, 1.0), p(15.0, 4.5), p(8.0, 8.0));
+            let (lb, cb, rb) = (p(1.0, 12.0), p(8.0, 15.5), p(15.0, 12.0));
+            let shade = |s: f32| [s, s, s, 1.0];
+            self.quad_points([l, t, r, c], top, shade(1.0));
+            self.quad_points([l, c, cb, lb], left, shade(0.8));
+            self.quad_points([c, r, rb, cb], right, shade(0.6));
+        }
+        if count > 1 {
+            let text = count.to_string();
+            let width = self.text_width(&text);
+            self.text(x + 17.0 - width, y + 9.0, &text, WHITE);
+        }
     }
 
     /// Repeats `src` over `dst`, cropping the last row/column.

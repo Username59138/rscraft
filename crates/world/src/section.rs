@@ -26,6 +26,19 @@ impl Section {
         }
     }
 
+    /// Coordinates are local, 0..16.
+    pub fn set(&mut self, x: i32, y: i32, z: i32, block: Block) {
+        if let Section::Uniform(current) = *self {
+            if current == block {
+                return;
+            }
+            *self = Section::Blocks(Box::new([current; SECTION_VOLUME]));
+        }
+        if let Section::Blocks(blocks) = self {
+            blocks[Self::index(x, y, z)] = block;
+        }
+    }
+
     /// Collapses a full block array into `Uniform` when possible.
     pub fn from_blocks(blocks: Box<[Block; SECTION_VOLUME]>) -> Self {
         let first = blocks[0];

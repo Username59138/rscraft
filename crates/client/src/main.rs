@@ -4,12 +4,16 @@ mod chunks;
 mod clouds;
 mod debug;
 mod frustum;
+mod hud;
+mod inventory;
 mod input;
 mod mesh;
 mod movement;
 mod player;
+mod raycast;
 mod renderer;
 mod saves;
+mod selection;
 mod screens;
 mod sky;
 mod texture;
@@ -36,7 +40,12 @@ fn main() {
     };
     let block_images = texture::BlockImages::load(jar.as_mut());
     let sky_images = sky::SkyImages::load(jar.as_mut());
-    let atlas = ui::GuiAtlas::load(jar.as_mut());
+    let icons: Vec<_> = rscraft_world::Block::ALL
+        .into_iter()
+        .filter(|b| b.drop() == Some(*b))
+        .map(|b| (b, block_images.icon_faces(b)))
+        .collect();
+    let atlas = ui::GuiAtlas::load(jar.as_mut(), &icons);
     let skin = jar
         .as_mut()
         .and_then(|jar| jar.texture("entity/player/wide/steve").map_err(|err| log::warn!("skin: {err:#}")).ok())

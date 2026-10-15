@@ -97,6 +97,59 @@ impl Block {
         !matches!(self, Block::Air | Block::Water | Block::OakLeaves)
     }
 
+    /// The block with this numeric id (its index in `ALL`).
+    pub fn from_id(id: u8) -> Option<Block> {
+        Block::ALL.get(id as usize).copied()
+    }
+
+    /// Whether the crosshair can select this block.
+    pub fn is_targetable(self) -> bool {
+        !matches!(self, Block::Air | Block::Water)
+    }
+
+    /// Vanilla hardness; None means it can't be broken.
+    pub fn hardness(self) -> Option<f32> {
+        match self {
+            Block::Air | Block::Water | Block::Bedrock => None,
+            Block::Stone => Some(1.5),
+            Block::Dirt | Block::Sand => Some(0.5),
+            Block::Grass | Block::Gravel => Some(0.6),
+            Block::OakLog => Some(2.0),
+            Block::OakLeaves => Some(0.2),
+        }
+    }
+
+    /// Seconds to break by hand. There are no tools yet, so every block
+    /// breaks at the "right tool" speed: hardness × 1.5 s.
+    pub fn break_seconds(self) -> Option<f32> {
+        self.hardness().map(|h| h * 1.5)
+    }
+
+    /// The item dropped when this block is broken.
+    pub fn drop(self) -> Option<Block> {
+        match self {
+            Block::Grass => Some(Block::Dirt),
+            Block::Air | Block::Water | Block::Bedrock | Block::OakLeaves => None,
+            other => Some(other),
+        }
+    }
+
+    /// Display name, like vanilla's.
+    pub fn name(self) -> &'static str {
+        match self {
+            Block::Air => "Air",
+            Block::Stone => "Stone",
+            Block::Dirt => "Dirt",
+            Block::Grass => "Grass Block",
+            Block::Sand => "Sand",
+            Block::Gravel => "Gravel",
+            Block::Bedrock => "Bedrock",
+            Block::Water => "Water",
+            Block::OakLog => "Oak Log",
+            Block::OakLeaves => "Oak Leaves",
+        }
+    }
+
     /// Whether entities collide with this block.
     pub fn is_solid(self) -> bool {
         !matches!(self, Block::Air | Block::Water)

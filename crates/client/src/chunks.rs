@@ -16,6 +16,10 @@ use crate::texture::BlockLayers;
 /// closest columns are always picked first when the player moves.
 const MAX_GENERATING: usize = 32;
 
+/// Blocks changed by the player, per column, by world position. Applied on
+/// top of freshly generated terrain and saved with the world.
+pub type Edits = HashMap<IVec2, HashMap<IVec3, Block>>;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ColumnState {
     Generating,
@@ -34,11 +38,15 @@ pub struct ChunkManager {
     columns: HashMap<IVec2, ColumnState>,
     sections: HashMap<IVec3, Arc<Section>>,
     generating: usize,
+    edits: Edits,
+    /// Bumped every time a column is (re)meshed, so results of outdated
+    /// meshing jobs can be told apart and dropped.
+    mesh_versions: HashMap<IVec2, u32>,
 
     generated_tx: Sender<(IVec2, Vec<Section>)>,
     generated_rx: Receiver<(IVec2, Vec<Section>)>,
-    meshed_tx: Sender<(IVec3, SectionMesh)>,
-    meshed_rx: Receiver<(IVec3, SectionMesh)>,
+    meshed_tx: Sender<(IVec3, u32, SectionMesh)>,
+    meshed_rx: Receiver<(IVec3, u32, SectionMesh)>,
 }
 
 pub fn column_of(position: Vec3) -> IVec2 {
@@ -46,7 +54,7 @@ pub fn column_of(position: Vec3) -> IVec2 {
 }
 
 impl ChunkManager {
-    pub fn new(generator: Arc<Generator>, layers: Arc<BlockLayers>, render_distance: i32) -> Self {
+    pub fn new(generator: Arc<Generator>, layers: Arc<BlockLayers>, render_distance: i32, edits: Edits) -> Self {
         let load_order = Self::load_order(render_distance);
         let (generated_tx, generated_rx) = crossbeam_channel::unbounded();
         let (meshed_tx, meshed_rx) = crossbeam_channel::unbounded();
@@ -58,6 +66,8 @@ impl ChunkManager {
             columns: HashMap::new(),
             sections: HashMap::new(),
             generating: 0,
+            edits,
+            mesh_versions: HashMap::new(),
             generated_tx,
             generated_rx,
             meshed_tx,
@@ -87,6 +97,32 @@ impl ChunkManager {
         let section = pos.div_euclid(IVec3::splat(SECTION_SIZE));
         let local = pos.rem_euclid(IVec3::splat(SECTION_SIZE));
         self.sections.get(&section).map(|s| s.get(local.x, local.y, local.z))
+    }
+
+    /// Changes a block, records the edit and re-meshes the columns whose
+    /// geometry or light it can affect. Returns false if it isn't loaded.
+    pub fn set_block(&mut self, pos: IVec3, block: Block) -> bool {
+        let section_pos = pos.div_euclid(IVec3::splat(SECTION_SIZE));
+        let local = pos.rem_euclid(IVec3::splat(SECTION_SIZE));
+        let Some(section) = self.sections.get_mut(&section_pos) else { return false };
+        Arc::make_mut(section).set(local.x, local.y, local.z, block);
+
+        let column = IVec2::new(section_pos.x, section_pos.z);
+        self.edits.entry(column).or_default().insert(pos, block);
+        // Light spreads up to 15 blocks, so all neighbouring columns may change.
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let c = column + IVec2::new(dx, dz);
+                if self.columns.get(&c) == Some(&ColumnState::Meshed) {
+                    self.columns.insert(c, ColumnState::Generated);
+                }
+            }
+        }
+        true
+    }
+
+    pub fn edits(&self) -> &Edits {
+        &self.edits
     }
 
     pub fn loaded_columns(&self) -> usize {
@@ -132,9 +168,10 @@ impl ChunkManager {
     }
 
     fn receive_meshes(&mut self, renderer: &mut Renderer) {
-        while let Ok((pos, mesh)) = self.meshed_rx.try_recv() {
-            // Drop meshes of columns unloaded in the meantime.
-            if self.columns.get(&IVec2::new(pos.x, pos.z)) == Some(&ColumnState::Meshed) {
+        while let Ok((pos, version, mesh)) = self.meshed_rx.try_recv() {
+            // Drop meshes of unloaded columns and of outdated jobs.
+            let column = IVec2::new(pos.x, pos.z);
+            if self.columns.contains_key(&column) && self.mesh_versions.get(&column) == Some(&version) {
                 renderer.upload_section(pos, &mesh);
             }
         }
@@ -149,6 +186,7 @@ impl ChunkManager {
             .collect();
         for column in far {
             self.columns.remove(&column);
+            self.mesh_versions.remove(&column);
             for i in 0..SECTIONS_PER_COLUMN as i32 {
                 self.sections.remove(&IVec3::new(column.x, MIN_SECTION_Y + i, column.y));
             }
@@ -181,16 +219,21 @@ impl ChunkManager {
             });
             let layers = self.layers.clone();
             let tx = self.meshed_tx.clone();
+            let version = self.mesh_versions.entry(column).or_insert(0);
+            *version += 1;
+            let version = *version;
             // Light needs the whole 3×3 group, so a column is lit and meshed in one job.
             rayon::spawn(move || {
                 let light = LightRegion::compute(&columns);
                 for (index, section) in columns[4].iter().enumerate() {
-                    if section.is_empty() {
-                        continue;
-                    }
                     let pos = IVec3::new(column.x, MIN_SECTION_Y + index as i32, column.y);
-                    let mesh = Neighborhood::from_columns(&columns, index).build_mesh(pos, &layers, &light);
-                    let _ = tx.send((pos, mesh));
+                    // Empty sections are sent too, so a re-mesh clears what was dug out.
+                    let mesh = if section.is_empty() {
+                        SectionMesh::default()
+                    } else {
+                        Neighborhood::from_columns(&columns, index).build_mesh(pos, &layers, &light)
+                    };
+                    let _ = tx.send((pos, version, mesh));
                 }
             });
         }
@@ -209,8 +252,17 @@ impl ChunkManager {
             self.generating += 1;
             let generator = self.generator.clone();
             let tx = self.generated_tx.clone();
+            let edits = self.edits.get(&column).cloned().unwrap_or_default();
             rayon::spawn(move || {
-                let _ = tx.send((column, generator.generate_column(column.x, column.y)));
+                let mut sections = generator.generate_column(column.x, column.y);
+                for (pos, block) in edits {
+                    let local = pos.rem_euclid(IVec3::splat(SECTION_SIZE));
+                    let index = (pos.y.div_euclid(SECTION_SIZE) - MIN_SECTION_Y) as usize;
+                    if let Some(section) = sections.get_mut(index) {
+                        section.set(local.x, local.y, local.z, block);
+                    }
+                }
+                let _ = tx.send((column, sections));
             });
         }
     }

@@ -7,6 +7,9 @@ use winit::keyboard::KeyCode;
 pub struct Input {
     pressed: HashSet<KeyCode>,
     mouse_delta: (f32, f32),
+    /// Mouse buttons held down while playing.
+    pub attack: bool,
+    pub use_item: bool,
 }
 
 impl Input {
@@ -34,6 +37,8 @@ impl Input {
 
     pub fn clear(&mut self) {
         self.pressed.clear();
+        self.attack = false;
+        self.use_item = false;
         self.mouse_delta = (0.0, 0.0);
     }
 }

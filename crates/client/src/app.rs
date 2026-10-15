@@ -3,7 +3,8 @@ use std::time::Instant;
 
 use glam::Vec3;
 use rscraft_assets::RgbaImage;
-use rscraft_world::{Generator, SEA_LEVEL};
+use glam::IVec3;
+use rscraft_world::{Block, Generator, SEA_LEVEL};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -12,12 +13,16 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::camera::{Camera, Perspective};
-use crate::chunks::ChunkManager;
+use crate::chunks::{ChunkManager, Edits};
 use crate::debug::{self, DebugInfo};
+use crate::hud;
 use crate::input::Input;
+use crate::inventory::Inventory;
 use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
 use crate::player::{self, HandPose, PlayerPose};
+use crate::raycast::{Hit, REACH, raycast};
 use crate::renderer::Renderer;
+use crate::selection::Selection;
 use crate::saves::{self, Options, PlayerSave, WorldEntry};
 use crate::screens::{self, Action, Screen};
 use crate::sky::{DayCycle, SkyImages};
@@ -51,6 +56,12 @@ struct Session {
     world: Option<WorldEntry>,
     /// The player; None for the title backdrop.
     player: Option<PlayerController>,
+    inventory: Inventory,
+    /// Block being broken and how far along it is (0..1).
+    breaking: Option<(IVec3, f32)>,
+    /// Delays between breaking or placing blocks while a button is held.
+    break_cooldown: f32,
+    place_cooldown: f32,
     /// Arm swing progress, 0 when idle.
     swing: f32,
     /// Smoothed FOV multipliers for sprinting and zooming.
@@ -95,13 +106,17 @@ impl Session {
         let mut camera = Camera::new(aspect, Vec3::new(0.5, height + 24.0, 0.5), 0.0, -0.15);
         camera.set_fov(options.fov);
         // The backdrop doesn't need the full render distance.
-        let chunks = ChunkManager::new(generator, layers.clone(), options.render_distance.min(10));
+        let chunks = ChunkManager::new(generator, layers.clone(), options.render_distance.min(10), Edits::new());
         Self {
             chunks,
             camera,
             day: DayCycle { time: time_override().unwrap_or(0.15) },
             world: None,
             player: None,
+            inventory: Inventory::default(),
+            breaking: None,
+            break_cooldown: 0.0,
+            place_cooldown: 0.0,
             swing: 0.0,
             sprint_fov: 1.0,
             zoom_fov: 1.0,
@@ -118,12 +133,18 @@ impl Session {
         };
         let mut camera = Camera::new(aspect, player.eye(), yaw, pitch);
         camera.set_fov(options.fov);
+        let inventory = entry.save.player.as_ref().map(PlayerSave::load_inventory).unwrap_or_default();
+        let edits = entry.read_edits();
         Self {
-            chunks: ChunkManager::new(generator, layers.clone(), options.render_distance),
+            chunks: ChunkManager::new(generator, layers.clone(), options.render_distance, edits),
             day: DayCycle { time: time_override().unwrap_or(entry.save.time_of_day) },
             camera,
             world: Some(entry),
             player: Some(player),
+            inventory,
+            breaking: None,
+            break_cooldown: 0.0,
+            place_cooldown: 0.0,
             swing: 0.0,
             sprint_fov: 1.0,
             zoom_fov: 1.0,
@@ -133,12 +154,19 @@ impl Session {
 
     fn save(&mut self) {
         let (Some(world), Some(player)) = (&mut self.world, &self.player) else { return };
-        world.save.player = Some(PlayerSave {
+        let mut save = PlayerSave {
             position: (player.position + Vec3::Y * EYE_HEIGHT).to_array(),
             yaw: self.camera.yaw,
             pitch: self.camera.pitch,
             flying: player.flying,
-        });
+            inventory: Vec::new(),
+            selected_slot: 0,
+        };
+        save.store_inventory(&self.inventory);
+        world.save.player = Some(save);
+        if let Err(err) = world.write_edits(self.chunks.edits()) {
+            log::error!("{err:#}");
+        }
         world.save.time_of_day = self.day.time;
         world.save.last_played = saves::now();
         match world.write() {
@@ -175,6 +203,60 @@ impl Session {
                 self.swing = 0.0;
             }
         }
+    }
+
+    /// Breaking and placing blocks with the mouse buttons held. Returns the
+    /// block under the crosshair and its breaking progress.
+    fn interact(&mut self, dt: f32, attack: bool, use_item: bool) -> Option<(Hit, f32)> {
+        let eye = self.player.as_ref()?.eye();
+        self.break_cooldown = (self.break_cooldown - dt).max(0.0);
+        self.place_cooldown = (self.place_cooldown - dt).max(0.0);
+        let chunks = &self.chunks;
+        let Some(hit) = raycast(eye, self.camera.forward(), REACH, |pos| chunks.block_at(pos)) else {
+            self.breaking = None;
+            return None;
+        };
+
+        let target = chunks.block_at(hit.block).unwrap_or(Block::Air);
+        match (attack, target.break_seconds()) {
+            (true, Some(seconds)) if self.break_cooldown == 0.0 => {
+                let progress = match self.breaking {
+                    Some((pos, progress)) if pos == hit.block => progress,
+                    _ => 0.0,
+                } + dt / seconds.max(0.05);
+                if self.swing == 0.0 {
+                    self.start_swing();
+                }
+                if progress >= 1.0 {
+                    self.chunks.set_block(hit.block, Block::Air);
+                    if let Some(item) = target.drop() {
+                        self.inventory.add(item, 1);
+                    }
+                    self.breaking = None;
+                    // Vanilla waits 5 ticks before starting on the next block.
+                    self.break_cooldown = 0.25;
+                } else {
+                    self.breaking = Some((hit.block, progress));
+                }
+            }
+            _ => self.breaking = None,
+        }
+
+        if use_item && self.place_cooldown == 0.0 && hit.normal != IVec3::ZERO {
+            let pos = hit.block + hit.normal;
+            let free = matches!(self.chunks.block_at(pos), Some(Block::Air | Block::Water));
+            let blocked = self.player.as_ref().is_some_and(|p| p.intersects_block(pos));
+            if free && !blocked
+                && let Some(stack) = self.inventory.selected_stack()
+            {
+                self.chunks.set_block(pos, stack.block);
+                self.inventory.take_selected();
+                self.start_swing();
+                // Vanilla repeats placement every 4 ticks while held.
+                self.place_cooldown = 0.2;
+            }
+        }
+        Some((hit, self.breaking.map_or(0.0, |(_, p)| p)))
     }
 
     /// Mouse wheel while zooming: positive notches zoom in.
@@ -317,9 +399,18 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 state.ui.input.mouse = glam::Vec2::new(position.x as f32, position.y as f32) / state.ui.scale;
             }
+            WindowEvent::MouseInput { state: button_state, button: MouseButton::Right, .. } => {
+                let pressed = button_state == ElementState::Pressed;
+                state.input.use_item = pressed && state.playing() && state.mouse_grabbed;
+                if pressed {
+                    // A fresh click places right away; holding repeats.
+                    state.session.place_cooldown = 0.0;
+                }
+            }
             WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
                 let pressed = button_state == ElementState::Pressed;
                 state.ui.input.mouse_down = pressed;
+                state.input.attack = pressed && state.playing() && state.mouse_grabbed;
                 if !pressed {
                     return;
                 }
@@ -342,6 +433,8 @@ impl ApplicationHandler for App {
                 };
                 if state.playing() && state.input.is_pressed(KeyCode::KeyC) {
                     state.session.scroll_zoom(notches);
+                } else if state.playing() {
+                    state.session.inventory.scroll(notches.round() as i32);
                 } else {
                     state.ui.input.scroll += notches;
                 }
@@ -394,6 +487,10 @@ impl State {
                 KeyCode::Escape => self.open(Screen::Pause),
                 KeyCode::F3 => self.show_debug = !self.show_debug,
                 KeyCode::F5 => self.perspective = self.perspective.next(),
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5
+                | KeyCode::Digit6 | KeyCode::Digit7 | KeyCode::Digit8 | KeyCode::Digit9 => {
+                    self.session.inventory.selected = code as usize - KeyCode::Digit1 as usize;
+                }
                 _ => {}
             }
             return;
@@ -449,6 +546,12 @@ impl State {
         }
         let zoom = self.playing() && self.input.is_pressed(KeyCode::KeyC);
         self.session.update_player(dt, controls, self.options.fov, zoom);
+        let target = if self.playing() {
+            self.session.interact(dt, self.input.attack, self.input.use_item)
+        } else {
+            self.session.breaking = None;
+            None
+        };
 
         self.session.chunks.update(self.session.camera.position, &mut self.renderer);
         if let Screen::Loading { progress } = &mut self.screen {
@@ -469,6 +572,9 @@ impl State {
         if self.playing() && self.perspective == Perspective::FirstPerson {
             let (cx, cy) = ((self.ui.width / 2.0).floor(), (self.ui.height / 2.0).floor());
             self.ui.sprite(Sprite::Crosshair, Rect::new(cx - 7.0, cy - 7.0, 15.0, 15.0), [1.0; 4]);
+        }
+        if self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
+            hud::hotbar(&mut self.ui, &self.session.inventory);
         }
         if self.show_debug && self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
             let camera = &self.session.camera;
@@ -506,6 +612,12 @@ impl State {
             seconds,
             player_mesh.as_deref(),
             hand_mesh.as_deref(),
+            target
+                .map(|(hit, progress)| Selection {
+                    block: hit.block,
+                    crack_layer: (progress > 0.0).then(|| self.layers.destroy_stage(progress)),
+                })
+                .as_ref(),
             &self.ui.vertices,
             [self.ui.width, self.ui.height],
         );

@@ -21,9 +21,19 @@ const DOWNFALL: f32 = 0.4;
 #[derive(Clone)]
 pub struct BlockLayers {
     table: [[u32; 6]; Block::ALL.len()],
+    /// First of the ten consecutive block-breaking crack layers.
+    destroy_stages: u32,
 }
 
+/// Number of crack textures, destroy_stage_0..9.
+pub const DESTROY_STAGES: u32 = 10;
+
 impl BlockLayers {
+    /// Crack texture for breaking progress 0..1.
+    pub fn destroy_stage(&self, progress: f32) -> u32 {
+        self.destroy_stages + ((progress * DESTROY_STAGES as f32) as u32).min(DESTROY_STAGES - 1)
+    }
+
     #[inline]
     pub fn get(&self, block: Block, face: Face) -> u32 {
         self.table[block as usize][face as usize]
@@ -88,8 +98,23 @@ impl BlockImages {
                 });
             }
         }
+        let destroy_stages = images.len() as u32;
+        for stage in 0..DESTROY_STAGES {
+            let name = format!("destroy_stage_{stage}");
+            let image = jar
+                .as_deref_mut()
+                .and_then(|jar| jar.block_texture(&name).map_err(|err| log::warn!("{name}: {err:#}")).ok())
+                .map_or_else(missing_texture, |image| image.resized(TEXTURE_SIZE, TEXTURE_SIZE));
+            images.push(Layer::new(vec![image], 1));
+        }
+
         log::info!("loaded {} block textures", images.len() - 1);
-        Self { layers: BlockLayers { table }, images }
+        Self { layers: BlockLayers { table, destroy_stages }, images }
+    }
+
+    /// The top, south and east face images of a block, for inventory icons.
+    pub fn icon_faces(&self, block: Block) -> [RgbaImage; 3] {
+        [Face::Up, Face::South, Face::East].map(|face| self.images[self.layers.get(block, face) as usize].frames[0][0].clone())
     }
 }
 

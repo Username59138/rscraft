@@ -58,6 +58,15 @@ fn fs_solid(in: VertexOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_crack(in: VertexOut) -> @location(0) vec4<f32> {
+    let color = textureSample(block_textures, block_sampler, in.uv, in.layer);
+    if color.a < 0.1 {
+        discard;
+    }
+    return vec4<f32>(color.rgb, 1.0);
+}
+
+@fragment
 fn fs_translucent(in: VertexOut) -> @location(0) vec4<f32> {
     return shaded(in);
 }

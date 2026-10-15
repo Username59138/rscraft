@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use rscraft_assets::{ClientJar, RgbaImage};
+use rscraft_world::Block;
 
 const ATLAS_WIDTH: u32 = 256;
 const FONT_CELL: u32 = 8;
@@ -27,10 +28,12 @@ pub enum Sprite {
     HeaderSeparator,
     FooterSeparator,
     Crosshair,
+    Hotbar,
+    HotbarSelection,
 }
 
 impl Sprite {
-    const ALL: [Sprite; 15] = [
+    const ALL: [Sprite; 17] = [
         Sprite::White,
         Sprite::Button,
         Sprite::ButtonHighlighted,
@@ -46,6 +49,8 @@ impl Sprite {
         Sprite::HeaderSeparator,
         Sprite::FooterSeparator,
         Sprite::Crosshair,
+        Sprite::Hotbar,
+        Sprite::HotbarSelection,
     ];
 
     /// Path under `assets/minecraft/textures/`.
@@ -66,6 +71,8 @@ impl Sprite {
             Sprite::HeaderSeparator => "gui/header_separator",
             Sprite::FooterSeparator => "gui/footer_separator",
             Sprite::Crosshair => "gui/sprites/hud/crosshair",
+            Sprite::Hotbar => "gui/sprites/hud/hotbar",
+            Sprite::HotbarSelection => "gui/sprites/hud/hotbar_selection",
         })
     }
 }
@@ -105,11 +112,21 @@ pub struct GuiAtlas {
     pub image: RgbaImage,
     sprites: HashMap<Sprite, SpriteInfo>,
     glyphs: HashMap<char, Glyph>,
+    /// Top, left and right faces of each block's inventory icon.
+    icons: HashMap<Block, [AtlasRect; 3]>,
+}
+
+/// What an image in the atlas is.
+enum Entry {
+    Sprite(Sprite, Option<Border>),
+    Font,
+    Icon(Block, usize),
 }
 
 impl GuiAtlas {
-    pub fn load(mut jar: Option<&mut ClientJar>) -> Self {
-        let mut images: Vec<(Option<Sprite>, RgbaImage, Option<Border>)> = Vec::new();
+    /// `icons` are the top, south and east face images of each block.
+    pub fn load(mut jar: Option<&mut ClientJar>, icons: &[(Block, [RgbaImage; 3])]) -> Self {
+        let mut images: Vec<(Entry, RgbaImage)> = Vec::new();
         for sprite in Sprite::ALL {
             let (image, border) = match sprite.path() {
                 None => (solid(1, 1, [255; 4]), None),
@@ -122,7 +139,12 @@ impl GuiAtlas {
                     None => (solid(16, 16, [110, 110, 110, 255]), None),
                 },
             };
-            images.push((Some(sprite), image, border));
+            images.push((Entry::Sprite(sprite, border), image));
+        }
+        for (block, faces) in icons {
+            for (i, face) in faces.iter().enumerate() {
+                images.push((Entry::Icon(*block, i), face.clone()));
+            }
         }
         let (font_image, font_chars) = match jar.as_deref_mut().map(load_font) {
             Some(Ok(font)) => font,
@@ -132,7 +154,7 @@ impl GuiAtlas {
             }
             None => (solid(1, 1, [0; 4]), Vec::new()),
         };
-        images.push((None, font_image, None));
+        images.push((Entry::Font, font_image));
 
         // Shelf packing: tallest first, left to right, new row when full.
         let mut order: Vec<usize> = (0..images.len()).collect();
@@ -155,7 +177,8 @@ impl GuiAtlas {
 
         let mut sprites = HashMap::new();
         let mut glyphs = HashMap::new();
-        for (i, (sprite, image, border)) in images.iter().enumerate() {
+        let mut icon_rects: HashMap<Block, [AtlasRect; 3]> = HashMap::new();
+        for (i, (entry, image)) in images.iter().enumerate() {
             let (px, py) = positions[i];
             for row in 0..image.height {
                 for col in 0..image.width {
@@ -163,11 +186,14 @@ impl GuiAtlas {
                 }
             }
             let rect = AtlasRect { x: px as f32, y: py as f32, w: image.width as f32, h: image.height as f32 };
-            match sprite {
-                Some(sprite) => {
+            match entry {
+                Entry::Sprite(sprite, border) => {
                     sprites.insert(*sprite, SpriteInfo { rect, border: *border });
                 }
-                None => {
+                Entry::Icon(block, face) => {
+                    icon_rects.entry(*block).or_insert([rect; 3])[*face] = rect;
+                }
+                Entry::Font => {
                     for (ch, cx, cy, width) in &font_chars {
                         let rect = AtlasRect {
                             x: (px + cx * FONT_CELL) as f32,
@@ -182,7 +208,11 @@ impl GuiAtlas {
             }
         }
 
-        Self { image: atlas, sprites, glyphs }
+        Self { image: atlas, sprites, glyphs, icons: icon_rects }
+    }
+
+    pub fn icon(&self, block: Block) -> Option<[AtlasRect; 3]> {
+        self.icons.get(&block).copied()
     }
 
     pub fn sprite(&self, sprite: Sprite) -> SpriteInfo {

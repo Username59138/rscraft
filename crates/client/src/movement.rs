@@ -138,6 +138,13 @@ impl PlayerController {
         (walk, self.previous_bob + (self.bob - self.previous_bob) * a)
     }
 
+    /// Whether the player's hitbox overlaps the block at `pos`.
+    pub fn intersects_block(&self, pos: IVec3) -> bool {
+        let player = Aabb::player(self.position);
+        let min = pos.as_vec3();
+        player.min.cmplt(min + Vec3::ONE).all() && player.max.cmpgt(min).all()
+    }
+
     /// Moves up out of any blocks the player is stuck in, e.g. a tree at spawn.
     pub fn unstuck(&mut self, world: &impl Fn(IVec3) -> Option<Block>) {
         for _ in 0..64 {
