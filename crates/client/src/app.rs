@@ -42,6 +42,8 @@ const TIME_FAST_FORWARD: f32 = 120.0;
 const SPAWN_RADIUS: i32 = 2;
 const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 
+/// View bobbing strength; 1.0 is vanilla.
+const VIEW_BOB_STRENGTH: f32 = 0.7;
 /// How fast the hand lowers and rises when switching items, per second.
 const EQUIP_SPEED: f32 = 0.4 * 20.0;
 /// Seconds for a full arm swing.
@@ -225,6 +227,7 @@ impl Session {
         }
         // View bobbing, like vanilla: sway sideways and dip at every step.
         let (walk, bob) = player.bobbing();
+        let bob = bob * VIEW_BOB_STRENGTH;
         let phase = walk * std::f32::consts::PI;
         let offset = self.camera.right() * (phase.sin() * bob * 0.5) - Vec3::Y * (phase.cos() * bob).abs();
         self.camera.position = player.eye() + offset;
