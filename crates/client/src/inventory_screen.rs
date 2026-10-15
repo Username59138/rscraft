@@ -24,7 +24,8 @@ fn slot_position(index: usize) -> (f32, f32) {
 }
 
 pub fn draw(ui: &mut Ui, inventory: &mut Inventory, cursor: &mut Option<ItemStack>, shift: bool) -> InventoryAction {
-    ui.fill(Rect::new(0.0, 0.0, ui.width, ui.height), 0x000000, 0.6);
+    // Vanilla's in-game screen background, about 75% black.
+    ui.fill(Rect::new(0.0, 0.0, ui.width, ui.height), 0x101010, 0.75);
     let left = ((ui.width - WIDTH) / 2.0).floor();
     let top = ((ui.height - HEIGHT) / 2.0).floor();
     ui.sprite_region(Sprite::InventoryScreen, 0.0, 0.0, Rect::new(left, top, WIDTH, HEIGHT));

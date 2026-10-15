@@ -63,7 +63,10 @@ fn fs_crack(in: VertexOut) -> @location(0) vec4<f32> {
     if color.a < 0.1 {
         discard;
     }
-    return vec4<f32>(color.rgb, 1.0);
+    // Vanilla multiplies the block by 2 × crack on sRGB values; the blend
+    // here gives 2 × output × block in linear space, so convert the factor.
+    let srgb = pow(color.rgb, vec3<f32>(1.0 / 2.2));
+    return vec4<f32>(pow(2.0 * srgb, vec3<f32>(2.2)) * 0.5, 1.0);
 }
 
 @fragment

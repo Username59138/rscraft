@@ -64,8 +64,7 @@ pub fn draw(screen: &mut Screen, ui: &mut Ui, options: &mut Options) -> Action {
     }
 }
 
-/// Darkens the world behind a menu. Blending happens in linear space, so it
-/// takes more alpha than in Minecraft to look as dark.
+/// Darkens the world behind a menu.
 fn dim(ui: &mut Ui, alpha: f32) {
     ui.fill(Rect::new(0.0, 0.0, ui.width, ui.height), 0x000000, alpha);
 }
@@ -95,7 +94,7 @@ fn select_world(ui: &mut Ui, state: &mut SelectWorld) -> Action {
     let mut action = Action::None;
 
     // List area.
-    ui.fill(Rect::new(0.0, top, ui.width, bottom - top), 0x000000, 0.8);
+    ui.fill(Rect::new(0.0, top, ui.width, bottom - top), 0x000000, 0.6);
     ui.sprite(Sprite::HeaderSeparator, Rect::new(0.0, top - 2.0, ui.width, 2.0), [1.0; 4]);
     ui.sprite(Sprite::FooterSeparator, Rect::new(0.0, bottom, ui.width, 2.0), [1.0; 4]);
     ui.text_centered(cx, 12.0, "Select World", WHITE);
@@ -168,7 +167,7 @@ fn select_world(ui: &mut Ui, state: &mut SelectWorld) -> Action {
 fn create_world(ui: &mut Ui, name: &mut String, seed: &mut String) -> Action {
     let cx = ui.width / 2.0;
     let left = (cx - 100.0).floor();
-    dim(ui, 0.8);
+    dim(ui, 0.6);
     ui.text_centered(cx, 20.0, "Create New World", WHITE);
     ui.text(left, 47.0, "World Name", GRAY);
     ui.text_field(1, Rect::new(left, 60.0, 200.0, 20.0), name, 32);
@@ -198,7 +197,7 @@ fn create_world(ui: &mut Ui, name: &mut String, seed: &mut String) -> Action {
 
 fn options_screen(ui: &mut Ui, options: &mut Options, from_pause: bool) -> Action {
     let cx = ui.width / 2.0;
-    dim(ui, 0.8);
+    dim(ui, 0.6);
     ui.text_centered(cx, 15.0, "Options", WHITE);
     let y = (ui.height / 6.0).floor();
     let row = |i: f32| Rect::centered(cx, y + i * 24.0, 200.0, 20.0);

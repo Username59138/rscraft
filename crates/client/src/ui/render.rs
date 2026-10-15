@@ -5,7 +5,7 @@ use super::{GuiAtlas, UiVertex};
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ScreenUniform {
-    /// GUI size in units (xy), unused (zw).
+    /// GUI size in units (xy); z = 1 when the target is a non-sRGB view.
     size: [f32; 4],
 }
 
@@ -16,6 +16,7 @@ pub struct UiRenderer {
     uniform: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     capacity: usize,
+    format: wgpu::TextureFormat,
 }
 
 impl UiRenderer {
@@ -52,7 +53,7 @@ impl UiRenderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -126,7 +127,12 @@ impl UiRenderer {
 
         let capacity = 4096;
         let vertex_buffer = Self::create_buffer(device, capacity);
-        Self { pipeline, bind_group, uniform, vertex_buffer, capacity }
+        Self { pipeline, bind_group, uniform, vertex_buffer, capacity, format }
+    }
+
+    /// The view format the GUI must be drawn into.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
     }
 
     fn create_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -155,7 +161,8 @@ impl UiRenderer {
             self.vertex_buffer = Self::create_buffer(device, self.capacity);
         }
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
-        let screen = ScreenUniform { size: [gui_size[0], gui_size[1], 0.0, 0.0] };
+        let gamma_target = if self.format.is_srgb() { 0.0 } else { 1.0 };
+        let screen = ScreenUniform { size: [gui_size[0], gui_size[1], gamma_target, 0.0] };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&screen));
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

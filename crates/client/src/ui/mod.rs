@@ -78,11 +78,11 @@ impl UiInput {
     }
 }
 
-/// Converts `0xRRGGBB` plus alpha to linear RGBA (the surface is sRGB).
+/// Converts `0xRRGGBB` plus alpha to RGBA. GUI colours and tints are sRGB
+/// values, like in Minecraft; the GUI shader takes care of the rest.
 pub fn color(rgb: u32, alpha: f32) -> [f32; 4] {
     let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.0;
-    let linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
-    [linear(channel(16)), linear(channel(8)), linear(channel(0)), alpha]
+    [channel(16), channel(8), channel(0), alpha]
 }
 
 pub struct Ui {

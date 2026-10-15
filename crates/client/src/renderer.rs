@@ -153,6 +153,14 @@ impl Renderer {
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        // The GUI is drawn through a non-sRGB view of the same frame so that
+        // its alpha blending happens on sRGB values, like in Minecraft.
+        let gamma_format = format.remove_srgb_suffix();
+        let can_reinterpret = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+        let ui_format = if can_reinterpret && gamma_format != format { gamma_format } else { format };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -162,7 +170,7 @@ impl Renderer {
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
+            view_formats: if ui_format != format { vec![ui_format] } else { vec![] },
         };
         surface.configure(&device, &config);
         let depth_view = create_depth_view(&device, &config);
@@ -291,7 +299,7 @@ impl Renderer {
             PlayerRenderer::new(&device, &queue, &entity_images.skin, &globals_layout, config.format, DEPTH_FORMAT);
         let shadows =
             ShadowRenderer::new(&device, &queue, &entity_images.shadow, &globals_layout, config.format, DEPTH_FORMAT);
-        let ui = UiRenderer::new(&device, &queue, atlas, config.format);
+        let ui = UiRenderer::new(&device, &queue, atlas, ui_format);
         let selection = SelectionRenderer::new(&device, &globals_layout, config.format, DEPTH_FORMAT);
 
         Self {
@@ -495,7 +503,11 @@ impl Renderer {
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
             self.player.draw_hand(&mut pass);
         }
-        self.ui.draw(&self.device, &self.queue, &mut encoder, &view, ui, gui_size);
+        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.ui.format()),
+            ..Default::default()
+        });
+        self.ui.draw(&self.device, &self.queue, &mut encoder, &ui_view, ui, gui_size);
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
     }

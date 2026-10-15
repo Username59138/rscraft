@@ -29,11 +29,24 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
+fn to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+}
+
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(atlas, atlas_sampler, in.uv);
     if texel.a <= 0.0 {
         discard;
     }
-    return texel * in.color;
+    // Vertex colours are sRGB. On a non-sRGB view the whole GUI works in
+    // sRGB like Minecraft, blending included; otherwise fall back to linear.
+    if screen.size.z > 0.5 {
+        return vec4<f32>(to_srgb(texel.rgb) * in.color.rgb, texel.a * in.color.a);
+    }
+    return vec4<f32>(texel.rgb * to_linear(in.color.rgb), texel.a * in.color.a);
 }
