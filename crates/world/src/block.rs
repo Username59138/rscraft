@@ -14,10 +14,20 @@ pub enum Block {
     /// Water with vanilla's `level` block state: 0 is a source, 1..=7 flow
     /// away from one (7 is the thinnest), 8..=15 are falling.
     Water(u8),
-    OakLog,
+    /// A log lies along the axis of the face it was placed against.
+    OakLog(Axis),
     OakLeaves,
     OakPlanks,
     CraftingTable,
+}
+
+/// An axis of the world, for blocks that lie along one (vanilla's `axis` state).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Axis {
+    X,
+    #[default]
+    Y,
+    Z,
 }
 
 /// The six cube faces, named after the direction they point to.
@@ -33,6 +43,19 @@ pub enum Face {
 
 impl Face {
     pub const ALL: [Face; 6] = [Face::East, Face::West, Face::Up, Face::Down, Face::South, Face::North];
+
+    pub fn axis(self) -> Axis {
+        match self {
+            Face::East | Face::West => Axis::X,
+            Face::Up | Face::Down => Axis::Y,
+            Face::South | Face::North => Axis::Z,
+        }
+    }
+
+    /// The face pointing along `normal`, a unit step along one axis.
+    pub fn from_normal(normal: [i32; 3]) -> Option<Face> {
+        Face::ALL.into_iter().find(|f| f.offset() == normal)
+    }
 
     pub fn offset(self) -> [i32; 3] {
         match self {
@@ -85,6 +108,8 @@ impl FaceTexture {
 impl Block {
     /// A water source block.
     pub const WATER: Block = Block::Water(0);
+    /// An upright oak log, as items are.
+    pub const OAK_LOG: Block = Block::OakLog(Axis::Y);
 
     pub const ALL: [Block; 12] = [
         Block::Air,
@@ -95,7 +120,7 @@ impl Block {
         Block::Gravel,
         Block::Bedrock,
         Block::WATER,
-        Block::OakLog,
+        Block::OAK_LOG,
         Block::OakLeaves,
         Block::OakPlanks,
         Block::CraftingTable,
@@ -118,7 +143,7 @@ impl Block {
             Block::Gravel => 5,
             Block::Bedrock => 6,
             Block::Water(_) => 7,
-            Block::OakLog => 8,
+            Block::OakLog(_) => 8,
             Block::OakLeaves => 9,
             Block::OakPlanks => 10,
             Block::CraftingTable => 11,
@@ -130,10 +155,16 @@ impl Block {
         Block::ALL.get(id as usize).copied()
     }
 
-    /// Block state beyond the type, 0 for blocks without any.
+    /// Block state beyond the type, 0 for blocks without any and for the
+    /// default state.
     pub fn state(self) -> u8 {
         match self {
             Block::Water(level) => level,
+            Block::OakLog(axis) => match axis {
+                Axis::Y => 0,
+                Axis::X => 1,
+                Axis::Z => 2,
+            },
             _ => 0,
         }
     }
@@ -142,8 +173,26 @@ impl Block {
     pub fn from_id_and_state(id: u8, state: u8) -> Option<Block> {
         match Block::from_id(id)? {
             Block::Water(_) if state < 16 => Some(Block::Water(state)),
+            Block::OakLog(_) => [Axis::Y, Axis::X, Axis::Z].get(state as usize).map(|&axis| Block::OakLog(axis)),
             _ if state != 0 => None,
             block => Some(block),
+        }
+    }
+
+    /// This block as an item, without its placement state.
+    pub fn item(self) -> Block {
+        match self {
+            Block::OakLog(_) => Block::OAK_LOG,
+            other => other,
+        }
+    }
+
+    /// The state this block (an item) takes when placed against the face
+    /// pointing along `normal`; logs lie along that face's axis.
+    pub fn placed_against(self, normal: [i32; 3]) -> Block {
+        match (self, Face::from_normal(normal)) {
+            (Block::OakLog(_), Some(face)) => Block::OakLog(face.axis()),
+            (block, _) => block,
         }
     }
 
@@ -163,7 +212,7 @@ impl Block {
             Block::Stone => Some(1.5),
             Block::Dirt | Block::Sand => Some(0.5),
             Block::Grass | Block::Gravel => Some(0.6),
-            Block::OakLog => Some(2.0),
+            Block::OakLog(_) => Some(2.0),
             Block::OakLeaves => Some(0.2),
             Block::OakPlanks => Some(2.0),
             Block::CraftingTable => Some(2.5),
@@ -181,7 +230,7 @@ impl Block {
         match self {
             Block::Grass => Some(Block::Dirt),
             Block::Air | Block::Water(_) | Block::Bedrock | Block::OakLeaves => None,
-            other => Some(other),
+            other => Some(other.item()),
         }
     }
 
@@ -196,17 +245,32 @@ impl Block {
             Block::Gravel => "gravel",
             Block::Bedrock => "bedrock",
             Block::Water(_) => "water",
-            Block::OakLog => "oak_log",
+            Block::OakLog(_) => "oak_log",
             Block::OakLeaves => "oak_leaves",
             Block::OakPlanks => "oak_planks",
             Block::CraftingTable => "crafting_table",
         }
     }
 
-    /// The block with this id, with or without the `minecraft:` namespace.
+    /// The block with this id, with or without the `minecraft:` namespace,
+    /// optionally with its state like in commands: `oak_log[axis=x]`.
     pub fn from_name(name: &str) -> Option<Block> {
         let name = name.strip_prefix("minecraft:").unwrap_or(name);
-        Block::ALL.into_iter().find(|b| b.id() == name)
+        let (id, state) = match name.split_once('[') {
+            Some((id, rest)) => (id, Some(rest.strip_suffix(']')?)),
+            None => (name, None),
+        };
+        let block = Block::ALL.into_iter().find(|b| b.id() == id)?;
+        let Some(state) = state else { return Some(block) };
+        match (block, state.split_once('=')?) {
+            (Block::OakLog(_), ("axis", axis)) => match axis {
+                "x" => Some(Block::OakLog(Axis::X)),
+                "y" => Some(Block::OakLog(Axis::Y)),
+                "z" => Some(Block::OakLog(Axis::Z)),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Display name, like vanilla's.
@@ -220,7 +284,7 @@ impl Block {
             Block::Gravel => "Gravel",
             Block::Bedrock => "Bedrock",
             Block::Water(_) => "Water",
-            Block::OakLog => "Oak Log",
+            Block::OakLog(_) => "Oak Log",
             Block::OakLeaves => "Oak Leaves",
             Block::OakPlanks => "Oak Planks",
             Block::CraftingTable => "Crafting Table",
@@ -258,6 +322,37 @@ impl Block {
         }
     }
 
+    /// Which face of the block's default state supplies the texture of
+    /// `face` in this state: a lying log shows its end towards its axis.
+    pub fn texture_face(self, face: Face) -> Face {
+        match self {
+            Block::OakLog(axis) if axis != Axis::Y => {
+                if face.axis() == axis {
+                    Face::Up
+                } else {
+                    Face::North
+                }
+            }
+            _ => face,
+        }
+    }
+
+    /// How many corners the texture of `face` is turned by: texture corner
+    /// `i` sits at the face's corner `i + turn` (see `mesh::corners`).
+    /// Derived from vanilla's oak_log blockstate, which turns the
+    /// cube_column_horizontal model by x = 90 (axis z) or x = 90, y = 90
+    /// (axis x), so the bark runs along the log.
+    pub fn texture_turn(self, face: Face) -> usize {
+        match (self, face) {
+            (Block::OakLog(Axis::X), Face::Up | Face::Down | Face::South) => 1,
+            (Block::OakLog(Axis::X), Face::North) => 3,
+            (Block::OakLog(Axis::Z), Face::East) => 1,
+            (Block::OakLog(Axis::Z), Face::West) => 3,
+            (Block::OakLog(Axis::Z), Face::Down) => 2,
+            _ => 0,
+        }
+    }
+
     pub fn texture(self, face: Face) -> FaceTexture {
         match self {
             Block::Air | Block::Stone => FaceTexture::plain("stone"),
@@ -275,7 +370,7 @@ impl Block {
             Block::Gravel => FaceTexture::plain("gravel"),
             Block::Bedrock => FaceTexture::plain("bedrock"),
             Block::Water(_) => FaceTexture::tinted("water_still", Tint::Water),
-            Block::OakLog => match face {
+            Block::OakLog(_) => match face {
                 Face::Up | Face::Down => FaceTexture::plain("oak_log_top"),
                 _ => FaceTexture::plain("oak_log"),
             },
@@ -288,6 +383,30 @@ impl Block {
                 Face::North | Face::West => "crafting_table_front",
                 Face::South | Face::East => "crafting_table_side",
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_with_states() {
+        assert_eq!(Block::from_name("minecraft:oak_log"), Some(Block::OAK_LOG));
+        assert_eq!(Block::from_name("oak_log[axis=x]"), Some(Block::OakLog(Axis::X)));
+        assert_eq!(Block::from_name("oak_log[axis=w]"), None);
+        assert_eq!(Block::from_name("stone[axis=x]"), None);
+    }
+
+    #[test]
+    fn logs_lie_along_the_face_they_are_placed_on() {
+        assert_eq!(Block::OAK_LOG.placed_against([1, 0, 0]), Block::OakLog(Axis::X));
+        assert_eq!(Block::OAK_LOG.placed_against([0, 0, -1]), Block::OakLog(Axis::Z));
+        assert_eq!(Block::OAK_LOG.placed_against([0, 1, 0]), Block::OAK_LOG);
+        assert_eq!(Block::OakLog(Axis::Z).drop(), Some(Block::OAK_LOG));
+        for state in [Block::OakLog(Axis::X), Block::OakLog(Axis::Z)] {
+            assert_eq!(Block::from_id_and_state(state.index() as u8, state.state()), Some(state));
         }
     }
 }

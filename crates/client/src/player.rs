@@ -46,6 +46,9 @@ pub struct PlayerPose {
     pub swim: f32,
     /// Sky light level at the player, 0..1.
     pub light: f32,
+    /// The whole model leaning back about its feet, in radians; the
+    /// inventory player leans towards the mouse.
+    pub lean: f32,
 }
 
 /// A box of the model in model pixels (Y up from the feet, front towards -Z,
@@ -250,7 +253,9 @@ fn body_transform(pose: &PlayerPose) -> Mat4 {
     let s = pose.swim;
     let tip = (-std::f32::consts::FRAC_PI_2 + pose.head_pitch) * s;
     let crouch = if pose.crouching { -2.0 / 16.0 } else { 0.0 };
-    Mat4::from_translation(pose.feet + Vec3::Y * (0.3 * s + crouch))
+    Mat4::from_translation(pose.feet)
+        * Mat4::from_rotation_x(-pose.lean)
+        * Mat4::from_translation(Vec3::Y * (0.3 * s + crouch))
         * Mat4::from_rotation_y(-pose.yaw)
         * Mat4::from_rotation_x(tip)
         * Mat4::from_translation(Vec3::Y * -0.9 * s)

@@ -394,7 +394,7 @@ impl Session {
                 && !blocked
                 && let Some(stack) = self.inventory.selected_stack()
             {
-                self.chunks.set_block(pos, stack.block);
+                self.chunks.set_block(pos, stack.block.placed_against(hit.normal.to_array()));
                 // Creative placing doesn't use up items.
                 if !mode.is_creative() {
                     self.inventory.take_selected();
@@ -450,10 +450,12 @@ impl Session {
         };
         let pose = PlayerPose {
             feet: Vec3::new(0.0, 0.0, -PREVIEW_DEPTH),
-            // Facing the viewer, turned 20° (body) and 40° (head) per radian.
+            // Facing the viewer, turned 20° (body) and 40° (head) per
+            // radian, and leaning back 20° and looking up 20° more per radian.
             yaw: std::f32::consts::PI + turn * 20f32.to_radians(),
             head_yaw: turn * 20f32.to_radians(),
             head_pitch: tilt * 20f32.to_radians(),
+            lean: tilt * 20f32.to_radians(),
             light: 1.0,
             ..pose
         };
@@ -590,6 +592,7 @@ impl Session {
             crouching: player.sneaking && !player.flying,
             swim: player.swim_amount(partial),
             light: self.player_light,
+            lean: 0.0,
         })
     }
 

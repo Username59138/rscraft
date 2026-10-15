@@ -128,7 +128,7 @@ impl Generator {
                 let Some(trunk) = self.tree_at(x, z, ground) else { continue };
                 let top = ground + trunk;
                 for y in ground + 1..=top {
-                    set(x, y, z, Block::OakLog, true);
+                    set(x, y, z, Block::OAK_LOG, true);
                 }
                 set(x, ground, z, Block::Dirt, true);
                 for y in top - 2..=top + 1 {

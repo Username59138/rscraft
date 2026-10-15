@@ -84,12 +84,14 @@ pub fn corners(face: Face) -> [[f32; 3]; 4] {
     }
 }
 
-/// Corners and texture coordinates of `face`, with the top corners lowered
+/// Corners and texture coordinates of `face`, with the texture turned by
+/// `turn` corners (see `Block::texture_turn`) and the top corners lowered
 /// to `heights` (water surfaces).
-fn face_vertices(face: Face, heights: CornerHeights) -> [([f32; 3], [f32; 2]); 4] {
+fn face_vertices(face: Face, turn: usize, heights: CornerHeights) -> [([f32; 3], [f32; 2]); 4] {
     const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
     let mut out = [([0.0; 3], [0.0; 2]); 4];
-    for (i, (mut corner, mut uv)) in corners(face).into_iter().zip(UVS).enumerate() {
+    for (i, mut corner) in corners(face).into_iter().enumerate() {
+        let mut uv = UVS[(i + turn) % 4];
         if corner[1] > 0.5 {
             let height = heights[corner[0] as usize][corner[2] as usize];
             corner[1] = height;
@@ -119,13 +121,22 @@ fn face_shade(face: Face) -> f32 {
     }
 }
 
+/// Which texture a face shows and how it is turned.
+#[derive(Clone, Copy)]
+struct FaceTexturing {
+    /// Layer in the block texture array.
+    layer: u32,
+    /// Corners the texture is turned by, see `Block::texture_turn`.
+    turn: usize,
+}
+
 /// Appends one block face at section-local block position `pos` as four
 /// vertices; sections are drawn with a shared index buffer of quads.
 fn push_terrain_face(
     out: &mut Vec<TerrainVertex>,
     pos: IVec3,
     face: Face,
-    layer: u32,
+    texture: FaceTexturing,
     ao: [u8; 4],
     sky: [f32; 4],
     heights: CornerHeights,
@@ -133,10 +144,10 @@ fn push_terrain_face(
     let unorm8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let shade = unorm8(face_shade(face));
     let mut quad = [TerrainVertex::zeroed(); 4];
-    for (i, (corner, uv)) in face_vertices(face, heights).into_iter().enumerate() {
+    for (i, (corner, uv)) in face_vertices(face, texture.turn, heights).into_iter().enumerate() {
         let p = (pos.as_vec3() + Vec3::from(corner)) * POSITION_SCALE;
         quad[i] = TerrainVertex {
-            position: [p.x as u16, p.y as u16, p.z as u16, layer as u16],
+            position: [p.x as u16, p.y as u16, p.z as u16, texture.layer as u16],
             uv: uv.map(|c| (c * 65535.0).round() as u16),
             light: [shade, unorm8(AO_CURVE[ao[i] as usize]), unorm8(sky[i]), 0],
         };
@@ -168,7 +179,7 @@ impl MeshData {
         let base = self.vertices.len() as u32;
         let normal = face.offset().map(|c| c as f32);
         let origin = pos.as_vec3();
-        for (((corner, uv), ao), sky) in face_vertices(face, [[height; 2]; 2]).into_iter().zip(ao).zip(sky) {
+        for (((corner, uv), ao), sky) in face_vertices(face, 0, [[height; 2]; 2]).into_iter().zip(ao).zip(sky) {
             self.vertices.push(Vertex {
                 position: (origin + Vec3::from(corner)).to_array(),
                 uv,
@@ -375,7 +386,7 @@ impl Neighborhood {
                         if !block.face_visible(neighbour) && !(lowered && block.is_water() && !neighbour.is_water()) {
                             continue;
                         }
-                        let texture = layers.get(block, face);
+                        let texture = FaceTexturing { layer: layers.get(block, face), turn: block.texture_turn(face) };
                         let (ao, sky) = self.face_lighting(local, face, light, origin_y);
                         match layer {
                             RenderLayer::Solid => {

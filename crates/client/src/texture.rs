@@ -44,7 +44,7 @@ impl BlockLayers {
 
     #[inline]
     pub fn get(&self, block: Block, face: Face) -> u32 {
-        self.table[block.index()][face as usize]
+        self.table[block.index()][block.texture_face(face) as usize]
     }
 }
 

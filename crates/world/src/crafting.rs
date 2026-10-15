@@ -12,7 +12,7 @@ pub type Grid = [Option<ItemStack>; 4];
 pub fn result(grid: &Grid) -> Option<ItemStack> {
     let blocks: Vec<Block> = grid.iter().flatten().map(|s| s.block).collect();
     match blocks.as_slice() {
-        [Block::OakLog] => Some(ItemStack { block: Block::OakPlanks, count: 4 }),
+        [Block::OAK_LOG] => Some(ItemStack { block: Block::OakPlanks, count: 4 }),
         [Block::OakPlanks, Block::OakPlanks, Block::OakPlanks, Block::OakPlanks] => {
             Some(ItemStack { block: Block::CraftingTable, count: 1 })
         }
@@ -63,21 +63,21 @@ mod tests {
 
     #[test]
     fn log_makes_planks_anywhere_and_planks_make_a_table() {
-        assert_eq!(result(&[None, None, stack(Block::OakLog, 3), None]), stack(Block::OakPlanks, 4));
-        assert_eq!(result(&[stack(Block::OakLog, 1), stack(Block::OakLog, 1), None, None]), None);
+        assert_eq!(result(&[None, None, stack(Block::OAK_LOG, 3), None]), stack(Block::OakPlanks, 4));
+        assert_eq!(result(&[stack(Block::OAK_LOG, 1), stack(Block::OAK_LOG, 1), None, None]), None);
         assert_eq!(result(&[stack(Block::OakPlanks, 1); 4]), stack(Block::CraftingTable, 1));
         assert_eq!(result(&[stack(Block::OakPlanks, 1), None, None, None]), None);
     }
 
     #[test]
     fn taking_the_result_uses_up_ingredients() {
-        let mut grid = [stack(Block::OakLog, 2), None, None, None];
+        let mut grid = [stack(Block::OAK_LOG, 2), None, None, None];
         let mut cursor = None;
         take_result(&mut grid, &mut cursor);
         take_result(&mut grid, &mut cursor);
         assert_eq!((grid[0], cursor), (None, stack(Block::OakPlanks, 8)));
 
-        let mut grid = [stack(Block::OakLog, 3), None, None, None];
+        let mut grid = [stack(Block::OAK_LOG, 3), None, None, None];
         let mut inventory = Inventory::default();
         take_all(&mut grid, &mut inventory);
         assert_eq!((grid[0], inventory.slots[0]), (None, stack(Block::OakPlanks, 12)));
