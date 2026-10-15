@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{IVec3, Mat4, Vec3};
+use glam::{IVec3, Mat4, Vec2, Vec3};
 use rscraft_world::{Block, ColumnGroup, Face, LightRegion, MAX_LIGHT, RenderLayer, SECTION_SIZE, Section, fluid};
 
 use crate::texture::BlockLayers;
@@ -130,6 +130,36 @@ struct FaceTexturing {
     layer: u32,
     /// Corners the texture is turned by, see `Block::texture_turn`.
     turn: usize,
+    uv: UvMapping,
+}
+
+/// How texture coordinates are laid on a face.
+#[derive(Clone, Copy, PartialEq)]
+enum UvMapping {
+    /// The whole texture.
+    Full,
+    /// Vanilla's flowing water sides: the top left quarter of water_flow,
+    /// mirrored.
+    FlowSide,
+    /// Vanilla's flowing water top: the middle of water_flow turned so it
+    /// streams along `direction` (x, z).
+    FlowTop(Vec2),
+}
+
+impl UvMapping {
+    fn map(self, corner: [f32; 3], [u, v]: [f32; 2]) -> [f32; 2] {
+        match self {
+            UvMapping::Full => [u, v],
+            UvMapping::FlowSide => [(1.0 - u) * 0.5, v * 0.5],
+            UvMapping::FlowTop(direction) => {
+                let angle = direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2;
+                let (s, c) = (angle.sin() * 0.25, angle.cos() * 0.25);
+                // -1 or 1 for the west/east and north/south corners.
+                let (a, b) = (corner[0] * 2.0 - 1.0, corner[2] * 2.0 - 1.0);
+                [0.5 + a * c + b * s, 0.5 + b * c - a * s]
+            }
+        }
+    }
 }
 
 /// Appends one block face at section-local block position `pos` as four
@@ -147,6 +177,7 @@ fn push_terrain_face(
     let shade = unorm8(face_shade(face));
     let mut quad = [TerrainVertex::zeroed(); 4];
     for (i, (corner, uv)) in face_vertices(face, texture.turn, heights).into_iter().enumerate() {
+        let uv = texture.uv.map(corner, uv);
         let p = (pos.as_vec3() + Vec3::from(corner)) * POSITION_SCALE;
         quad[i] = TerrainVertex {
             position: [p.x as u16, p.y as u16, p.z as u16, texture.layer as u16],
@@ -292,6 +323,32 @@ impl Neighborhood {
         heights
     }
 
+    /// Which way the water at `pos` flows, horizontally (x, z), normalized;
+    /// zero for still water. Like vanilla's FlowingFluid.getFlow: towards
+    /// lower neighbours, and towards drops next to it.
+    fn water_flow(&self, pos: IVec3) -> Vec2 {
+        let own = fluid::own_height(self.get(pos.x, pos.y, pos.z));
+        let mut flow = Vec2::ZERO;
+        for (dx, dz) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+            let side = pos + IVec3::new(dx, 0, dz);
+            let neighbour = self.get(side.x, side.y, side.z);
+            // Other fluids would block the flow; we only have water.
+            if neighbour.is_solid() {
+                continue;
+            }
+            let height = fluid::own_height(neighbour);
+            let distance = if height > 0.0 {
+                own - height
+            } else {
+                // Open but dry: flow towards the water below it, if any.
+                let below = fluid::own_height(self.get(side.x, side.y - 1, side.z));
+                if below > 0.0 { own - (below - 8.0 / 9.0) } else { 0.0 }
+            };
+            flow += Vec2::new(dx as f32, dz as f32) * distance;
+        }
+        flow.normalize_or_zero()
+    }
+
     fn corner_height(&self, own: f32, side_x: f32, side_z: f32, diagonal: IVec3) -> f32 {
         if side_x >= 1.0 || side_z >= 1.0 {
             return 1.0;
@@ -388,7 +445,25 @@ impl Neighborhood {
                         if !block.face_visible(neighbour) && !(lowered && block.is_water() && !neighbour.is_water()) {
                             continue;
                         }
-                        let texture = FaceTexturing { layer: layers.get(block, face), turn: block.texture_turn(face) };
+                        let mut texture = FaceTexturing {
+                            layer: layers.get(block, face),
+                            turn: block.texture_turn(face),
+                            uv: UvMapping::Full,
+                        };
+                        if block.is_water() {
+                            match face {
+                                Face::Up => {
+                                    let flow = self.water_flow(local);
+                                    if flow != Vec2::ZERO {
+                                        // The sides' texture is the flowing one.
+                                        texture.layer = layers.get(block, Face::North);
+                                        texture.uv = UvMapping::FlowTop(flow);
+                                    }
+                                }
+                                Face::Down => {}
+                                _ => texture.uv = UvMapping::FlowSide,
+                            }
+                        }
                         let (ao, sky) = self.face_lighting(local, face, light, origin_y);
                         match layer {
                             RenderLayer::Solid => {

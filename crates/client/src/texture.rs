@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use rscraft_assets::{ClientJar, RgbaImage};
 use rscraft_world::{Block, Face, FaceTexture, Tint};
 
-pub const TEXTURE_SIZE: u32 = 16;
+/// Block textures are 16×16, but flowing water is 32×32 and vanilla shows a
+/// quarter of it per face, so the array holds 32×32 layers.
+pub const TEXTURE_SIZE: u32 = 32;
 const MIP_LEVELS: u32 = TEXTURE_SIZE.ilog2() + 1;
 /// Minecraft runs at 20 ticks per second; animation frame times are in ticks.
 const TICK_SECONDS: f32 = 0.05;

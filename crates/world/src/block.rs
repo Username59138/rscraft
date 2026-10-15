@@ -369,7 +369,12 @@ impl Block {
             Block::Sand => FaceTexture::plain("sand"),
             Block::Gravel => FaceTexture::plain("gravel"),
             Block::Bedrock => FaceTexture::plain("bedrock"),
-            Block::Water(_) => FaceTexture::tinted("water_still", Tint::Water),
+            // Like vanilla's fluid renderer: still on top (when not flowing)
+            // and at the bottom, flowing down the sides.
+            Block::Water(_) => match face {
+                Face::Up | Face::Down => FaceTexture::tinted("water_still", Tint::Water),
+                _ => FaceTexture::tinted("water_flow", Tint::Water),
+            },
             Block::OakLog(_) => match face {
                 Face::Up | Face::Down => FaceTexture::plain("oak_log_top"),
                 _ => FaceTexture::plain("oak_log"),
