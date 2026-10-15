@@ -715,7 +715,7 @@ impl State {
         self.ui.begin(width, height, scale, dt);
         if self.playing() && self.perspective == Perspective::FirstPerson {
             let (cx, cy) = ((self.ui.width / 2.0).floor(), (self.ui.height / 2.0).floor());
-            self.ui.sprite(Sprite::Crosshair, Rect::new(cx - 7.0, cy - 7.0, 15.0, 15.0), [1.0; 4]);
+            self.ui.sprite_inverted(Sprite::Crosshair, Rect::new(cx - 7.0, cy - 7.0, 15.0, 15.0));
         }
         if self.in_world() && !matches!(self.screen, Screen::Loading { .. }) {
             hud::hotbar(&mut self.ui, &self.session.inventory);
@@ -811,6 +811,7 @@ impl State {
             &particle_mesh,
             &held_mesh,
             &self.ui.vertices,
+            self.ui.inverted.clone(),
             [self.ui.width, self.ui.height],
         );
         self.ui.input.end_frame();

@@ -12,6 +12,7 @@ struct ScreenUniform {
 /// Draws the GUI quads over the finished 3D frame.
 pub struct UiRenderer {
     pipeline: wgpu::RenderPipeline,
+    invert_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
@@ -95,8 +96,8 @@ impl UiRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gui pipeline"),
+        let pipeline = |label, blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -113,7 +114,7 @@ impl UiRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -125,9 +126,28 @@ impl UiRenderer {
             cache: None,
         });
 
+        // The crosshair inverts what's behind it, like vanilla's
+        // ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR blending.
+        let invert = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::OneMinusDst,
+                dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        };
+
         let capacity = 4096;
         let vertex_buffer = Self::create_buffer(device, capacity);
-        Self { pipeline, bind_group, uniform, vertex_buffer, capacity, format }
+        Self {
+            pipeline: pipeline("gui pipeline", wgpu::BlendState::ALPHA_BLENDING),
+            invert_pipeline: pipeline("gui invert pipeline", invert),
+            bind_group,
+            uniform,
+            vertex_buffer,
+            capacity,
+            format,
+        }
     }
 
     /// The view format the GUI must be drawn into.
@@ -151,6 +171,7 @@ impl UiRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         vertices: &[UiVertex],
+        inverted: std::ops::Range<usize>,
         gui_size: [f32; 2],
     ) {
         if vertices.is_empty() {
@@ -175,9 +196,15 @@ impl UiRenderer {
             })],
             ..Default::default()
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..vertices.len() as u32, 0..1);
+        // Everything in order, switching blending for the inverted range.
+        let (start, end, len) = (inverted.start as u32, inverted.end as u32, vertices.len() as u32);
+        for (pipeline, range) in [(&self.pipeline, 0..start), (&self.invert_pipeline, start..end), (&self.pipeline, end..len)] {
+            if !range.is_empty() {
+                pass.set_pipeline(pipeline);
+                pass.draw(range, 0..1);
+            }
+        }
     }
 }

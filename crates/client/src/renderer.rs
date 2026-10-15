@@ -411,6 +411,7 @@ impl Renderer {
         particles: &MeshData,
         held: &MeshData,
         ui: &[UiVertex],
+        ui_inverted: std::ops::Range<usize>,
         gui_size: [f32; 2],
     ) {
         self.block_textures.animate(&self.queue, seconds);
@@ -546,7 +547,7 @@ impl Renderer {
             format: Some(self.ui.format()),
             ..Default::default()
         });
-        self.ui.draw(&self.device, &self.queue, &mut encoder, &ui_view, ui, gui_size);
+        self.ui.draw(&self.device, &self.queue, &mut encoder, &ui_view, ui, ui_inverted, gui_size);
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
     }

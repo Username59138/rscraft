@@ -88,6 +88,8 @@ pub fn color(rgb: u32, alpha: f32) -> [f32; 4] {
 pub struct Ui {
     pub atlas: GuiAtlas,
     pub vertices: Vec<UiVertex>,
+    /// Vertices drawn inverting what's behind them (the crosshair).
+    pub inverted: std::ops::Range<usize>,
     pub input: UiInput,
     pub width: f32,
     pub height: f32,
@@ -104,6 +106,7 @@ impl Ui {
         Self {
             atlas,
             vertices: Vec::new(),
+            inverted: 0..0,
             input: UiInput::default(),
             width: 1.0,
             height: 1.0,
@@ -125,6 +128,7 @@ impl Ui {
 
     pub fn begin(&mut self, width_px: u32, height_px: u32, scale: u32, dt: f32) {
         self.vertices.clear();
+        self.inverted = 0..0;
         self.scale = scale as f32;
         self.width = (width_px as f32 / self.scale).ceil();
         self.height = (height_px as f32 / self.scale).ceil();
@@ -214,6 +218,14 @@ impl Ui {
     }
 
     /// Draws a sprite, honouring nine-slice borders; tiles otherwise.
+    /// Draws a sprite that inverts the colours behind it, like the crosshair.
+    /// Only one such sprite per frame.
+    pub fn sprite_inverted(&mut self, sprite: Sprite, dst: Rect) {
+        let start = self.vertices.len();
+        self.sprite(sprite, dst, [1.0; 4]);
+        self.inverted = start..self.vertices.len();
+    }
+
     pub fn sprite(&mut self, sprite: Sprite, dst: Rect, tint: [f32; 4]) {
         let info = self.atlas.sprite(sprite);
         let Some(Border { left, top, right, bottom }) = info.border else {
