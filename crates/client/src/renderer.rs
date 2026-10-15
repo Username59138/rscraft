@@ -393,6 +393,7 @@ impl Renderer {
         hand: Option<&[EntityVertex]>,
         selection: Option<&Selection>,
         items: &MeshData,
+        particles: &MeshData,
         held: &MeshData,
         ui: &[UiVertex],
         gui_size: [f32; 2],
@@ -400,6 +401,7 @@ impl Renderer {
         self.block_textures.animate(&self.queue, seconds);
         self.selection.prepare(&self.device, &self.queue, selection, self.size());
         let items = GpuMesh::upload(&self.device, items);
+        let particles = GpuMesh::upload(&self.device, particles);
         let held = GpuMesh::upload(&self.device, held);
         self.player.prepare(&self.queue, player, hand);
         self.clouds.update(&self.device, camera.position, seconds, self.cloud_extent());
@@ -471,6 +473,9 @@ impl Renderer {
             pass.set_pipeline(&self.solid_pipeline);
             for mesh in visible.iter().filter_map(|s| s.solid.as_ref()) {
                 mesh.draw(&mut pass);
+            }
+            if let Some(particles) = &particles {
+                particles.draw(&mut pass);
             }
             if let Some(items) = &items {
                 pass.set_pipeline(&self.item_pipeline);

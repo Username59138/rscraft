@@ -11,6 +11,7 @@ mod items;
 mod input;
 mod mesh;
 mod movement;
+mod particles;
 mod player;
 mod raycast;
 mod renderer;

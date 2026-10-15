@@ -129,6 +129,10 @@ impl ChunkManager {
         true
     }
 
+    pub fn layers(&self) -> &Arc<BlockLayers> {
+        &self.layers
+    }
+
     pub fn edits(&self) -> &Edits {
         &self.edits
     }

@@ -19,8 +19,9 @@ use crate::input::Input;
 use crate::inventory::{Inventory, ItemStack};
 use crate::inventory_screen::{self, InventoryAction};
 use crate::items::Items;
+use crate::particles::Particles;
 use crate::mesh::MeshData;
-use crate::movement::{Controls, EYE_HEIGHT, PlayerController};
+use crate::movement::{Controls, EYE_HEIGHT, PlayerController, TICK_SECONDS};
 use crate::player::{self, HandPose, PlayerPose};
 use crate::raycast::{Hit, REACH, raycast};
 use crate::renderer::{EntityImages, Renderer};
@@ -65,6 +66,8 @@ struct Session {
     /// The stack held by the mouse in the inventory screen.
     cursor: Option<ItemStack>,
     items: Items,
+    particles: Particles,
+    hit_particle_timer: f32,
     /// Block being broken and how far along it is (0..1).
     breaking: Option<(IVec3, f32)>,
     /// Delays between breaking or placing blocks while a button is held.
@@ -131,6 +134,8 @@ impl Session {
             inventory: Inventory::default(),
             cursor: None,
             items: Items::default(),
+            particles: Particles::default(),
+            hit_particle_timer: 0.0,
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
@@ -164,6 +169,8 @@ impl Session {
             inventory,
             cursor: None,
             items: Items::default(),
+            particles: Particles::default(),
+            hit_particle_timer: 0.0,
             breaking: None,
             break_cooldown: 0.0,
             place_cooldown: 0.0,
@@ -276,6 +283,7 @@ impl Session {
                 } + dt / seconds.max(0.05);
                 if progress >= 1.0 {
                     self.chunks.set_block(hit.block, Block::Air);
+                    self.particles.block_broken(hit.block, target, self.chunks.layers());
                     if let Some(item) = target.drop() {
                         self.items.spawn_at_block(hit.block, item, 1);
                     }
@@ -284,6 +292,12 @@ impl Session {
                     self.break_cooldown = 0.25;
                 } else {
                     self.breaking = Some((hit.block, progress));
+                    // Chips fly off the face being hit, about one per tick.
+                    self.hit_particle_timer -= dt;
+                    if self.hit_particle_timer <= 0.0 {
+                        self.hit_particle_timer += TICK_SECONDS;
+                        self.particles.block_hit(hit.block, hit.normal, target, self.chunks.layers());
+                    }
                 }
             }
             _ => self.breaking = None,
@@ -645,6 +659,7 @@ impl State {
             let feet = session.player.as_ref().filter(|_| matches!(self.screen, Screen::None)).map(PlayerController::feet);
             let chunks = &session.chunks;
             session.items.update(dt, feet, &mut session.inventory, &|pos| chunks.block_at(pos));
+            session.particles.update(dt, &|pos| chunks.block_at(pos));
         }
         if let Screen::Loading { progress } = &mut self.screen {
             *progress = self.session.chunks.progress(self.session.camera.position, SPAWN_RADIUS);
@@ -708,6 +723,12 @@ impl State {
         // First person shows what the switching animation says it holds.
         let shown_block = self.session.shown_item;
         let mut world_items = self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p));
+        let view_camera = self.session.camera.for_perspective(perspective);
+        let particle_mesh = self.session.particles.build_mesh(
+            view_camera.right(),
+            view_camera.right().cross(view_camera.forward()).normalize(),
+            |p| self.session.light_at(p),
+        );
         let mut held_mesh = MeshData::default();
         let mut hand_mesh = None;
         if let (Some(hand), Some(pose)) = (self.session.hand(), self.session.pose()) {
@@ -746,6 +767,7 @@ impl State {
                 })
                 .as_ref(),
             &world_items,
+            &particle_mesh,
             &held_mesh,
             &self.ui.vertices,
             [self.ui.width, self.ui.height],

@@ -38,18 +38,21 @@ pub struct Items {
 
 /// Tiny pseudo-random number in -1..1 for scattering drops.
 fn jitter(seed: f32) -> f32 {
-    ((seed * 12.9898).sin() * 43758.547).fract() * 2.0 - 1.0
+    // rem_euclid, not fract: fract keeps the sign, which made this -3..1.
+    ((seed * 12.9898).sin() * 43758.547).rem_euclid(1.0) * 2.0 - 1.0
 }
 
 impl Items {
     /// Drops an item at the centre of a block, with a little random hop.
     pub fn spawn_at_block(&mut self, pos: IVec3, block: Block, count: u8) {
         let seed = (pos.x * 73 + pos.y * 19 + pos.z * 31 + self.items.len() as i32) as f32;
+        // Like vanilla: somewhere around the centre, hopping up and out.
+        let position = pos.as_vec3() + 0.5 + Vec3::new(jitter(seed + 2.0), jitter(seed + 3.0), jitter(seed + 4.0)) * 0.25;
         self.items.push(DroppedItem {
             block,
             count,
-            position: pos.as_vec3() + 0.5,
-            previous: pos.as_vec3() + 0.5,
+            position,
+            previous: position,
             velocity: Vec3::new(jitter(seed) * 0.1, 0.2, jitter(seed + 1.0) * 0.1),
             on_ground: false,
             age: 0.0,
@@ -152,5 +155,18 @@ impl DroppedItem {
         }
         let friction = if self.on_ground { 0.6 * 0.98 } else { 0.98 };
         self.velocity *= Vec3::new(friction, 0.98, friction);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jitter_stays_in_range() {
+        for i in 0..10_000 {
+            let j = jitter(i as f32 * 0.37 - 1800.0);
+            assert!((-1.0..=1.0).contains(&j), "jitter({i}) = {j}");
+        }
     }
 }
