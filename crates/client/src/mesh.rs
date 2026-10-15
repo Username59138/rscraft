@@ -95,8 +95,10 @@ fn face_vertices(face: Face, turn: usize, heights: CornerHeights) -> [([f32; 3],
         if corner[1] > 0.5 {
             let height = heights[corner[0] as usize][corner[2] as usize];
             corner[1] = height;
-            // Crop side textures instead of squashing them.
-            if face != Face::Up && face != Face::Down {
+            // Crop the sides of lowered tops (water) instead of squashing
+            // their texture. Only unturned textures are ever lowered.
+            if height < 1.0 && face != Face::Up && face != Face::Down {
+                debug_assert_eq!(turn, 0);
                 uv[1] = 1.0 - height;
             }
         }
@@ -402,5 +404,18 @@ impl Neighborhood {
             }
         }
         mesh
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turned_textures_keep_every_corner() {
+        // A full side face turned by one corner: the UVs are the usual ones
+        // shifted, so both triangles map the same, unbroken texture.
+        let uvs: Vec<[f32; 2]> = face_vertices(Face::North, 1, FULL_HEIGHT).iter().map(|v| v.1).collect();
+        assert_eq!(uvs, [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [0.0, 1.0]]);
     }
 }
