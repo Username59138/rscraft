@@ -98,6 +98,7 @@ pub struct Renderer {
     solid_pipeline: wgpu::RenderPipeline,
     translucent_pipeline: wgpu::RenderPipeline,
     crack_pipeline: wgpu::RenderPipeline,
+    item_pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
@@ -250,13 +251,13 @@ impl Renderer {
             },
             alpha: wgpu::BlendComponent::OVER,
         };
-        let pipeline = |label, fragment, blend, translucent: bool| {
+        let pipeline = |label, vertex, fragment, blend, translucent: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(vertex),
                     buffers: &[Some(Vertex::layout())],
                     compilation_options: Default::default(),
                 },
@@ -289,10 +290,11 @@ impl Renderer {
                 cache: None,
             })
         };
-        let solid_pipeline = pipeline("solid pipeline", "fs_solid", wgpu::BlendState::REPLACE, false);
+        let solid_pipeline = pipeline("solid pipeline", "vs_main", "fs_solid", wgpu::BlendState::REPLACE, false);
+        let item_pipeline = pipeline("item pipeline", "vs_item", "fs_solid", wgpu::BlendState::REPLACE, false);
         let translucent_pipeline =
-            pipeline("translucent pipeline", "fs_translucent", wgpu::BlendState::ALPHA_BLENDING, true);
-        let crack_pipeline = pipeline("crack pipeline", "fs_crack", multiply, true);
+            pipeline("translucent pipeline", "vs_main", "fs_translucent", wgpu::BlendState::ALPHA_BLENDING, true);
+        let crack_pipeline = pipeline("crack pipeline", "vs_main", "fs_crack", multiply, true);
         let sky = SkyRenderer::new(&device, &queue, sky_images, &globals_layout, config.format, DEPTH_FORMAT);
         let clouds = CloudRenderer::new(&device, &sky_images.clouds, &globals_layout, config.format, DEPTH_FORMAT);
         let player =
@@ -311,6 +313,7 @@ impl Renderer {
             solid_pipeline,
             translucent_pipeline,
             crack_pipeline,
+            item_pipeline,
             globals_buffer,
             globals_bind_group,
             texture_bind_group,
@@ -470,6 +473,7 @@ impl Renderer {
                 mesh.draw(&mut pass);
             }
             if let Some(items) = &items {
+                pass.set_pipeline(&self.item_pipeline);
                 items.draw(&mut pass);
             }
             self.player.draw_body(&mut pass);
@@ -505,7 +509,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.globals_bind_group, &[]);
             self.player.draw_hand(&mut pass);
             if let Some(held) = &held {
-                pass.set_pipeline(&self.solid_pipeline);
+                pass.set_pipeline(&self.item_pipeline);
                 pass.set_bind_group(1, &self.texture_bind_group, &[]);
                 held.draw(&mut pass);
             }

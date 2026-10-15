@@ -21,12 +21,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.clip_position = globals.view_proj * vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
     out.world_pos = in.position;
-    // Entities get soft directional shading instead of fixed per-face values.
-    let n = normalize(in.normal);
-    let shade = 0.6 + 0.4 * max(n.y, 0.0) + 0.2 * abs(n.z) - 0.1 * max(-n.y, 0.0);
+    let shade = entity_shade(in.normal);
     // Lit by the sky light where the entity is, like blocks.
     let sky = light_brightness(in.light) * globals.zenith.w;
-    out.light = gamma_light(clamp(shade, 0.4, 1.0) * max(sky, 0.05));
+    out.light = gamma_light(shade * max(sky, 0.05));
     return out;
 }
 

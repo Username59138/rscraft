@@ -18,20 +18,29 @@ struct VertexOut {
     @location(3) world_pos: vec3<f32>,
 };
 
-@vertex
-fn vs_main(in: VertexIn) -> VertexOut {
+fn vertex(in: VertexIn, shade: f32) -> VertexOut {
     var out: VertexOut;
     out.clip_position = globals.view_proj * vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
     out.layer = in.layer;
     out.world_pos = in.position;
-    // Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
-    let n = in.normal;
-    let shade = 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z);
     // Sky light is scaled by the time of day; a little ambient keeps caves from pitch black.
     let sky = light_brightness(in.sky) * globals.zenith.w;
     out.light = gamma_light(shade * in.ao * max(sky, 0.05));
     return out;
+}
+
+@vertex
+fn vs_main(in: VertexIn) -> VertexOut {
+    // Minecraft-style fixed face shading: top bright, bottom dark, sides in between.
+    let n = in.normal;
+    return vertex(in, 1.0 * max(n.y, 0.0) + 0.5 * max(-n.y, 0.0) + 0.6 * abs(n.x) + 0.8 * abs(n.z));
+}
+
+/// Blocks drawn as items (dropped, held): lit like entities, not like terrain.
+@vertex
+fn vs_item(in: VertexIn) -> VertexOut {
+    return vertex(in, entity_shade(in.normal));
 }
 
 fn shaded(in: VertexOut) -> vec4<f32> {

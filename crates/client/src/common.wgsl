@@ -50,6 +50,16 @@ fn light_brightness(level: f32) -> f32 {
     return mix(dim, bright, 0.5);
 }
 
+/// Minecraft's lighting for entities and items: two fixed directional
+/// lights from above (its minecraft_mix_light), so sides and bottoms are
+/// clearly darker than tops.
+fn entity_shade(normal: vec3<f32>) -> f32 {
+    let light0 = normalize(vec3<f32>(0.2, 1.0, -0.7));
+    let light1 = normalize(vec3<f32>(-0.2, 1.0, 0.7));
+    let n = normalize(normal);
+    return min(1.0, (max(dot(light0, n), 0.0) + max(dot(light1, n), 0.0)) * 0.6 + 0.4);
+}
+
 /// Cylindrical fog like Minecraft: horizontal distance only.
 fn fog_factor(world_pos: vec3<f32>) -> f32 {
     let dist = distance(world_pos.xz, globals.camera_pos.xz);

@@ -81,6 +81,9 @@ struct Session {
     zoom_fov: f32,
     /// How many times the view is magnified while zooming.
     zoom_level: f32,
+    /// Light on the player and what they hold, eased so shade sets in and
+    /// lifts gradually instead of flickering block by block.
+    player_light: f32,
 }
 
 /// Like vanilla, spawn on dry land: search outwards from the origin in a
@@ -137,6 +140,7 @@ impl Session {
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
+            player_light: 1.0,
         }
     }
 
@@ -169,6 +173,7 @@ impl Session {
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
+            player_light: 1.0,
         }
     }
 
@@ -219,6 +224,17 @@ impl Session {
         self.camera.set_fov(fov * self.sprint_fov * self.zoom_fov);
         // Switching items lowers the hand out of view, swaps what it shows,
         // then raises it again, like vanilla (0.4 of the way per tick).
+        // The darkest of the blocks the player's body is in (feet, middle,
+        // eyes), so standing half under a ledge or canopy already shades
+        // them; darkening is quick, brightening slower, so shade lingers.
+        let feet = player.position;
+        let target = [0.1, 0.9, EYE_HEIGHT - 0.1]
+            .map(|dy| self.light_at(feet + Vec3::Y * dy))
+            .into_iter()
+            .fold(1.0, f32::min);
+        let rate = if target < self.player_light { 8.0 } else { 2.5 };
+        self.player_light += (target - self.player_light) * (dt * rate).min(1.0);
+
         let held = self.inventory.selected_stack().map(|s| s.block);
         let target = if held == self.shown_item { 1.0 } else { 0.0 };
         let step = EQUIP_SPEED * dt;
@@ -335,7 +351,7 @@ impl Session {
             yaw: self.camera.yaw,
             head_pitch: self.camera.pitch,
             swing: (walk * 3.6).sin() * (bob * 9.0).min(0.9),
-            light: self.light_at(player.eye()),
+            light: self.player_light,
         })
     }
 
@@ -349,7 +365,7 @@ impl Session {
             pitch: self.camera.pitch,
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
-            light: self.light_at(player.eye()),
+            light: self.player_light,
             equip: self.equip,
             aspect: self.camera.aspect(),
             fov_y: self.camera.fov_y() / self.zoom_fov,
