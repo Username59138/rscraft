@@ -40,6 +40,8 @@ const TIME_FAST_FORWARD: f32 = 120.0;
 const SPAWN_RADIUS: i32 = 2;
 const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 
+/// How fast the hand lowers and rises when switching items, per second.
+const EQUIP_SPEED: f32 = 0.4 * 20.0;
 /// Seconds for a full arm swing.
 const SWING_SECONDS: f32 = 0.2;
 /// FOV multiplier while sprinting, like vanilla.
@@ -70,6 +72,10 @@ struct Session {
     place_cooldown: f32,
     /// Arm swing progress, 0 when idle.
     swing: f32,
+    /// What the first-person hand shows (None = bare arm) and how far it is
+    /// raised (1 = in place, 0 = out of view below the screen).
+    shown_item: Option<Block>,
+    equip: f32,
     /// Smoothed FOV multipliers for sprinting and zooming.
     sprint_fov: f32,
     zoom_fov: f32,
@@ -126,6 +132,8 @@ impl Session {
             break_cooldown: 0.0,
             place_cooldown: 0.0,
             swing: 0.0,
+            shown_item: None,
+            equip: 1.0,
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
@@ -156,6 +164,8 @@ impl Session {
             break_cooldown: 0.0,
             place_cooldown: 0.0,
             swing: 0.0,
+            shown_item: None,
+            equip: 1.0,
             sprint_fov: 1.0,
             zoom_fov: 1.0,
             zoom_level: DEFAULT_ZOOM,
@@ -207,6 +217,15 @@ impl Session {
         let zoom_target = if zoom { 1.0 / self.zoom_level } else { 1.0 };
         self.zoom_fov += (zoom_target - self.zoom_fov) * smoothing;
         self.camera.set_fov(fov * self.sprint_fov * self.zoom_fov);
+        // Switching items lowers the hand out of view, swaps what it shows,
+        // then raises it again, like vanilla (0.4 of the way per tick).
+        let held = self.inventory.selected_stack().map(|s| s.block);
+        let target = if held == self.shown_item { 1.0 } else { 0.0 };
+        let step = EQUIP_SPEED * dt;
+        self.equip += (target - self.equip).clamp(-step, step);
+        if self.equip < 0.1 {
+            self.shown_item = held;
+        }
         if self.swing > 0.0 {
             self.swing += dt / SWING_SECONDS;
             if self.swing >= 1.0 {
@@ -331,6 +350,7 @@ impl Session {
             swing: self.swing,
             bob: Vec3::new(phase.sin() * bob * 0.5, -(phase.cos() * bob).abs(), 0.0),
             light: self.light_at(player.eye()),
+            equip: self.equip,
             aspect: self.camera.aspect(),
             fov_y: self.camera.fov_y() / self.zoom_fov,
         })
@@ -669,11 +689,14 @@ impl State {
         // Like vanilla, a held block replaces the bare hand in first person
         // and sits in Steve's right hand in third person.
         let held_block = self.in_world().then(|| self.session.inventory.selected_stack()).flatten().map(|s| s.block);
+        // First person shows what the switching animation says it holds.
+        let shown_block = self.session.shown_item;
         let mut world_items = self.session.items.build_mesh(&self.layers, seconds, |p| self.session.light_at(p));
         let mut held_mesh = MeshData::default();
         let mut hand_mesh = None;
         if let (Some(hand), Some(pose)) = (self.session.hand(), self.session.pose()) {
-            match (perspective, held_block) {
+            let in_hand = if perspective == Perspective::FirstPerson { shown_block } else { held_block };
+            match (perspective, in_hand) {
                 (Perspective::FirstPerson, Some(block)) => {
                     held_mesh.push_block(block, &self.layers, player::held_block_first_person(&hand), hand.light);
                 }

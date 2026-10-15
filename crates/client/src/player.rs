@@ -103,6 +103,8 @@ pub struct HandPose {
     pub pitch: f32,
     /// Swing progress 0..1 (0 = not swinging).
     pub swing: f32,
+    /// How far the hand is raised when switching items: 1 = in place, 0 = hidden.
+    pub equip: f32,
     /// View bobbing offset in view space.
     pub bob: Vec3,
     /// Sky light level at the player, 0..1.
@@ -120,6 +122,11 @@ const SWING_AMOUNT: f32 = 1.0;
 
 /// Minecraft always draws the hand with this FOV, whatever the zoom or setting.
 const HAND_FOV: f32 = 70.0 * std::f32::consts::PI / 180.0;
+
+/// Lowers the hand while switching items, like vanilla (0.6 below when hidden).
+fn equip_offset(pose: &HandPose) -> Vec3 {
+    Vec3::new(0.0, -0.6 * (1.0 - pose.equip), 0.0)
+}
 
 /// Camera-space to world-space for first-person objects, with the FOV
 /// correction that keeps them the same size when sprinting.
@@ -147,7 +154,7 @@ pub fn held_block_first_person(pose: &HandPose) -> Mat4 {
     // Vanilla's offsets assume a 16:9 window; in narrower ones the block
     // would slide off the right edge, so keep its place on screen instead.
     let x = 0.56 * (pose.aspect / (16.0 / 9.0)).min(1.0);
-    let item = Mat4::from_translation(Vec3::new(x, -0.52, -0.72) + push + pose.bob)
+    let item = Mat4::from_translation(Vec3::new(x, -0.52, -0.72) + push + pose.bob + equip_offset(pose))
         * Mat4::from_rotation_y(deg(45.0 - 20.0 * twist))
         * Mat4::from_rotation_z(deg(-20.0 * tilt))
         * Mat4::from_rotation_x(deg(-80.0 * tilt))
@@ -184,7 +191,8 @@ pub fn build_hand_mesh(pose: &HandPose) -> Vec<EntityVertex> {
     let swing_down = (s * std::f32::consts::PI).sin() * SWING_AMOUNT;
     let swing_side = (s.sqrt() * std::f32::consts::PI).sin() * SWING_AMOUNT;
     // View space: X right, Y up, -Z forward.
-    let shoulder = Vec3::new(0.36 - swing_side * 0.25, -0.66 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob;
+    let shoulder =
+        Vec3::new(0.36 - swing_side * 0.25, -0.66 + swing_down * 0.1, -0.3 - swing_down * 0.15) + pose.bob + equip_offset(pose);
     // Angled up and in towards the centre of the screen, like vanilla.
     let arm = Mat4::from_translation(shoulder)
         * Mat4::from_rotation_y(0.15 + swing_side * 0.4)
